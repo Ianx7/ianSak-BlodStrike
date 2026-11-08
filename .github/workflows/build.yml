@@ -41,7 +41,7 @@ jobs:
           cat > control <<'EOF'
           Package: com.apple.bsutil
           Name: BS Utils
-          Version: 1.3.1
+          Version: 1.4.0
           Architecture: iphoneos-arm
           Description: utilidades varias
           Maintainer: ianSak
@@ -60,7 +60,7 @@ jobs:
       - name: tweak
         run: |
           cat > libbs.xm <<'EOF'
-          // libbs.xm — aimbot cabeza + ESP cercano + NPC + antidetect
+          // libbs.xm
           #import <UIKit/UIKit.h>
           #import <Foundation/Foundation.h>
           #import <objc/runtime.h>
@@ -185,31 +185,20 @@ jobs:
             MSHookFunction((void *)_dyld_get_image_name,(void *)h_iname,  (void **)&o_iname);
           }
 
-          // ---------- il2cpp ----------
+          // ---------- il2cpp (solo exports reales) ----------
           static void *(*p_domain_get)(void);
           static void *(*p_thread_attach)(void *);
-          static void **(*p_get_assemblies)(void *, uint32_t *);
-          static void *(*p_assembly_image)(void *);
+          static void **(*p_domain_get_assemblies)(void *, uint32_t *);
+          static void *(*p_assembly_get_image)(void *);
           static void *(*p_class_from_name)(void *, const char *, const char *);
-          static void *(*p_field_from_name)(void *, const char *);
-          static size_t (*p_field_offset)(void *);
-          static void (*p_field_static_get)(void *, void *);
+          static void *(*p_class_get_field_from_name)(void *, const char *);
+          static size_t (*p_field_get_offset)(void *);
+          static void (*p_field_static_get_value)(void *, void *);
           static void *(*p_class_get_type)(void *);
-          static void *(*p_method_from_name)(void *, const char *, int);
+          static void *(*p_class_get_method_from_name)(void *, const char *, int);
           static void *(*p_runtime_invoke)(void *, void *, void **, void **);
-          static void *(*p_comp_transform)(void *);
-          static V3 (*p_get_pos)(void *);
-          static Quat (*p_get_rot)(void *);
-          static void (*p_set_rot)(void *, Quat);
-          static Quat (*p_look_rot)(V3, V3);
-          static Quat (*p_slerp)(Quat, Quat, float);
-          static void *(*p_cam_main)(void);
-          static V3 (*p_w2s)(void *, V3);
-          static void *(*p_find)(void *, void *);
-          static void *(*p_get_child)(void *, int);
-          static int (*p_child_count)(void *);
+          static void *(*p_object_unbox)(void *);
           static void *(*p_string_new)(const char *);
-          static int (*p_screen_w)(void);
 
           #define RES(x) p_##x = dlsym(RTLD_DEFAULT, "il2cpp_" #x)
 
@@ -218,16 +207,9 @@ jobs:
             RES(assembly_get_image); RES(class_from_name); RES(class_get_field_from_name);
             RES(field_get_offset); RES(field_static_get_value); RES(class_get_type);
             RES(class_get_method_from_name); RES(runtime_invoke);
-            RES(component_get_transform); RES(transform_get_position);
-            RES(transform_get_rotation); RES(transform_set_rotation);
-            RES(quaternion_look_rotation); RES(quaternion_slerp);
-            RES(camera_get_main); RES(camera_world_to_screen_point);
-            RES(transform_find); RES(transform_get_child);
-            RES(transform_get_child_count); RES(string_new);
-            RES(screen_get_width);
-            p_method_from_name = p_class_get_method_from_name;
-            p_screen_w = p_screen_get_width;
+            RES(object_unbox); RES(string_new);
             if (!p_domain_get || !p_thread_attach || !p_class_from_name) return NO;
+            if (!p_class_get_method_from_name || !p_runtime_invoke || !p_object_unbox) return NO;
             void *dom = p_domain_get();
             if (!dom) return NO;
             p_thread_attach(dom);
@@ -236,10 +218,10 @@ jobs:
 
           static void *clsNS(const char *ns, const char *name) {
             uint32_t n = 0;
-            void **asms = p_get_assemblies(p_domain_get(), &n);
+            void **asms = p_domain_get_assemblies(p_domain_get(), &n);
             if (!asms) return NULL;
             for (uint32_t i = 0; i < n; i++) {
-              void *img = p_assembly_image(asms[i]);
+              void *img = p_assembly_get_image(asms[i]);
               if (!img) continue;
               void *c = p_class_from_name(img, ns, name);
               if (c) return c;
@@ -247,14 +229,22 @@ jobs:
             return NULL;
           }
           static void *cls(const char *n) { return clsNS("", n); }
+          static void *meth(void *k, const char *n, int c) {
+            return k ? p_class_get_method_from_name(k, n, c) : NULL;
+          }
+          static void *invoke(void *m, void *obj, void **args) {
+            if (!m) return NULL;
+            void *exc = NULL;
+            return p_runtime_invoke(m, obj, args, &exc);
+          }
           static size_t off(void *c, const char *f) {
-            void *fi = c ? p_field_from_name(c, f) : NULL;
-            return fi ? p_field_offset(fi) : 0;
+            void *fi = c ? p_class_get_field_from_name(c, f) : NULL;
+            return fi ? p_field_get_offset(fi) : 0;
           }
           static void *staticObj(void *c, const char *f) {
-            void *fi = p_field_from_name(c, f);
+            void *fi = c ? p_class_get_field_from_name(c, f) : NULL;
             if (!fi) return NULL;
-            void *v = NULL; p_field_static_get(fi, &v); return v;
+            void *v = NULL; p_field_static_get_value(fi, &v); return v;
           }
           static int readInt(void *o, size_t f) { return f ? *(int *)((char *)o + f) : -1; }
           static float readF(void *o, size_t f) { return f ? *(float *)((char *)o + f) : 1.0f; }
@@ -262,6 +252,48 @@ jobs:
           static float dist3(V3 a, V3 b) {
             float dx=a.x-b.x, dy=a.y-b.y, dz=a.z-b.z;
             return sqrtf(dx*dx+dy*dy+dz*dz);
+          }
+
+          // metodos gestionados de Unity
+          static void *gCompCls, *gTransCls, *gCamCls, *gQuatCls;
+          static void *mCompTransform, *mGetPos, *mGetRot, *mSetRot;
+          static void *mFind, *mGetChild, *mChildCount;
+          static void *mCamMain, *mW2S, *mLookRot, *mSlerp;
+
+          static void *compTransform(void *c) { return invoke(mCompTransform, c, NULL); }
+          static V3 getPos(void *t) {
+            void *r = invoke(mGetPos, t, NULL);
+            return r ? *(V3 *)p_object_unbox(r) : (V3){0,0,0};
+          }
+          static Quat getRot(void *t) {
+            void *r = invoke(mGetRot, t, NULL);
+            return r ? *(Quat *)p_object_unbox(r) : (Quat){0,0,0,1};
+          }
+          static void setRot(void *t, Quat q) { void *a[1] = { &q }; invoke(mSetRot, t, a); }
+          static void *camMain(void) { return invoke(mCamMain, NULL, NULL); }
+          static V3 w2sRaw(void *cam, V3 wp) {
+            void *a[1] = { &wp };
+            void *r = invoke(mW2S, cam, a);
+            return r ? *(V3 *)p_object_unbox(r) : (V3){0,0,0};
+          }
+          static void *findChild(void *t, const char *n) {
+            void *a[1] = { p_string_new(n) };
+            return invoke(mFind, t, a);
+          }
+          static void *getChild(void *t, int i) { void *a[1] = { &i }; return invoke(mGetChild, t, a); }
+          static int childCount(void *t) {
+            void *r = invoke(mChildCount, t, NULL);
+            return r ? *(int *)p_object_unbox(r) : 0;
+          }
+          static Quat lookRot(V3 d, V3 u) {
+            void *a[2] = { &d, &u };
+            void *r = invoke(mLookRot, NULL, a);
+            return r ? *(Quat *)p_object_unbox(r) : (Quat){0,0,0,1};
+          }
+          static Quat slerpQ(Quat a, Quat b, float t) {
+            void *ar[3] = { &a, &b, &t };
+            void *r = invoke(mSlerp, NULL, ar);
+            return r ? *(Quat *)p_object_unbox(r) : a;
           }
 
           static const char *kPlayerCls[] = { "Player","PlayerController","BasePlayer","Character","Avatar","Actor","Entity" };
@@ -283,12 +315,11 @@ jobs:
 
           static void *findBoneRec(void *t, const char *name, int depth) {
             if (!t || depth > 7) return NULL;
-            void *s = p_string_new(name);
-            void *r = p_find(t, s);
+            void *r = findChild(t, name);
             if (r) return r;
-            int n = p_child_count(t);
+            int n = childCount(t);
             for (int i = 0; i < n && i < 64; i++) {
-              void *hit = findBoneRec(p_get_child(t, i), name, depth + 1);
+              void *hit = findBoneRec(getChild(t, i), name, depth + 1);
               if (hit) return hit;
             }
             return NULL;
@@ -310,10 +341,8 @@ jobs:
 
           static void *findAll(void *klass) {
             if (!gFindM || !klass) return NULL;
-            void *type = p_class_get_type(klass);
-            void *args[1] = { type };
-            void *exc = NULL;
-            return p_runtime_invoke(gFindM, NULL, args, &exc);
+            void *a[1] = { p_class_get_type(klass) };
+            return invoke(gFindM, NULL, a);
           }
 
           static void scan(void) {
@@ -344,8 +373,8 @@ jobs:
             return NULL;
           }
 
-          static CGPoint w2s(void *cam, V3 wp, CGFloat scale, BOOL *ok) {
-            V3 sp = p_w2s(cam, wp);
+          static CGPoint w2sP(void *cam, V3 wp, CGFloat scale, BOOL *ok) {
+            V3 sp = w2sRaw(cam, wp);
             *ok = (sp.z > 0.01f);
             return CGPointMake(sp.x / scale, sp.y / scale);
           }
@@ -359,31 +388,29 @@ jobs:
           }
 
           static void tick(void) {
-            if (!gReady) return;
+            if (!gReady || !mCompTransform) return;
             static double last = 0;
             double now = CACurrentMediaTime();
-            float dt = last ? (float)(now - last) : 0.016f;
-            if (dt > 0.1f) dt = 0.1f;
+            float dt = last ? (float)(now - last) : 0.033f;
+            if (dt > 0.2f) dt = 0.2f;
             last = now;
 
             [gSegs removeAllObjects]; [gLabels removeAllObjects];
             scan();
 
-            void *cam = p_cam_main();
+            void *cam = camMain();
             if (!cam) { [gOverlay setNeedsDisplay]; return; }
-            void *camT = p_comp_transform(cam);
+            void *camT = compTransform(cam);
             if (!camT) { [gOverlay setNeedsDisplay]; return; }
-            V3 camPos = p_get_pos(camT);
-            Quat camRot = p_get_rot(camT);
+            V3 camPos = getPos(camT);
+            Quat camRot = getRot(camT);
 
             void *local = localPlayer();
-            if (local) { void *lt = p_comp_transform(local); if (lt) camPos = p_get_pos(lt); }
+            if (local) { void *lt = compTransform(local); if (lt) camPos = getPos(lt); }
             int lteam = local ? readInt(local, oTeam) : -1;
 
-            CGFloat viewW = gOverlay.bounds.size.width;
-            CGFloat scale = 1.0;
-            if (p_screen_w && p_screen_w() > 0 && viewW > 0) scale = (CGFloat)p_screen_w() / viewW;
-
+            CGFloat scale = UIScreen.mainScreen.nativeScale;
+            if (scale < 1.0) scale = 1.0;
             CGPoint center = CGPointMake(gOverlay.bounds.size.width / 2, gOverlay.bounds.size.height / 2);
             void *best = NULL; float bestD = 1e9f;
 
@@ -393,10 +420,9 @@ jobs:
               if (oDead && readB(e, oDead)) continue;
               if (oHp && readF(e, oHp) <= 0.01f) continue;
 
-              void *t = p_comp_transform(e);
+              void *t = compTransform(e);
               if (!t) continue;
-              V3 p = p_get_pos(t);
-              float d = dist3(camPos, p);
+              float d = dist3(camPos, getPos(t));
               if (d > 200.0f) continue;
 
               BOOL enemy = YES;
@@ -406,7 +432,7 @@ jobs:
               void *head = findBone(t, kHead, 6);
               if (!head) continue;
               BOOL ok = NO;
-              CGPoint sp = w2s(cam, p_get_pos(head), scale, &ok);
+              CGPoint sp = w2sP(cam, getPos(head), scale, &ok);
 
               if (gAimbot && ok) {
                 float sd = hypotf(sp.x - center.x, sp.y - center.y);
@@ -414,18 +440,18 @@ jobs:
               }
 
               if (gEsp && d <= gEspRange) {
-                const char **names[8] = { kHead, kNeck, kChest, kHips, kLH, kRH, kLF, kRF };
-                int counts[8] = { 6, 4, 6, 5, 4, 4, 4, 4 };
+                const char **nm[8] = { kHead, kNeck, kChest, kHips, kLH, kRH, kLF, kRF };
+                int cnt[8] = { 6, 4, 6, 5, 4, 4, 4, 4 };
                 CGPoint pts[8]; BOOL okp[8];
                 for (int b = 0; b < 8; b++) {
-                  void *bt = findBone(t, names[b], counts[b]);
+                  void *bt = findBone(t, nm[b], cnt[b]);
                   okp[b] = NO;
                   if (!bt) continue;
-                  pts[b] = w2s(cam, p_get_pos(bt), scale, &okp[b]);
+                  pts[b] = w2sP(cam, getPos(bt), scale, &okp[b]);
                 }
-                int pairs[8][2] = {{0,1},{1,2},{2,3},{3,6},{3,7},{2,4},{2,5},{0,3}};
+                int pr[8][2] = {{0,1},{1,2},{2,3},{3,6},{3,7},{2,4},{2,5},{0,3}};
                 for (int k = 0; k < 8; k++) {
-                  int a1 = pairs[k][0], b1 = pairs[k][1];
+                  int a1 = pr[k][0], b1 = pr[k][1];
                   if (!okp[a1] || !okp[b1]) continue;
                   Seg s; s.a = pts[a1]; s.b = pts[b1]; s.npc = NO;
                   [gSegs addObject:[NSValue valueWithBytes:&s objCType:@encode(Seg)]];
@@ -435,21 +461,20 @@ jobs:
             }
 
             if (gAimbot && best) {
-              void *bt = p_comp_transform(best);
+              void *bt = compTransform(best);
               void *head = bt ? findBone(bt, kHead, 6) : NULL;
               if (head) {
-                V3 tp = p_get_pos(head);
+                V3 tp = getPos(head);
                 tp.x += ((rand() % 100) - 50) * 0.0004f;
                 tp.y += ((rand() % 100) - 50) * 0.0004f;
                 tp.z += ((rand() % 100) - 50) * 0.0004f;
                 V3 dir = (V3){ tp.x - camPos.x, tp.y - camPos.y, tp.z - camPos.z };
                 V3 up = (V3){0,1,0};
                 if (fabsf(dir.x) < 0.01f && fabsf(dir.z) < 0.01f) up = (V3){0,0,1};
-                Quat want = p_look_rot(dir, up);
                 float dAng = ang((V3){0,0,-1}, dir);
                 float step = gAimSpeed * dt;
                 float k = (dAng > 0.01f) ? MIN(1.0f, step / dAng) : 1.0f;
-                p_set_rot(camT, p_slerp(camRot, want, k));
+                setRot(camT, slerpQ(camRot, lookRot(dir, up), k));
               }
             }
 
@@ -490,12 +515,12 @@ jobs:
           @property (nonatomic, strong) UIView *panel;
           @property (nonatomic, strong) UIButton *fab;
           @property (nonatomic, strong) CADisplayLink *link;
-          - (void)tick:(CADisplayLink *)l;
+          - (void)frame:(CADisplayLink *)l;
           @end
 
           @implementation _BSMenu
 
-          - (void)tick:(CADisplayLink *)l { tick(); }
+          - (void)frame:(CADisplayLink *)l { tick(); }
 
           - (UISwitch *)row:(CGFloat)y t:(NSString *)t on:(BOOL)on act:(SEL)a {
             UISwitch *s = [[UISwitch alloc] initWithFrame:CGRectMake(12, y, 51, 31)];
@@ -606,14 +631,30 @@ jobs:
             }
             if (!p_domain_get || !p_domain_get()) return NULL;
 
+            gCompCls  = clsNS("UnityEngine", "Component");
+            gTransCls = clsNS("UnityEngine", "Transform");
+            gCamCls   = clsNS("UnityEngine", "Camera");
+            gQuatCls  = clsNS("UnityEngine", "Quaternion");
+            gObjCls   = clsNS("UnityEngine", "Object");
+
+            mCompTransform = meth(gCompCls, "get_transform", 0);
+            mGetPos = meth(gTransCls, "get_position", 0);
+            mGetRot = meth(gTransCls, "get_rotation", 0);
+            mSetRot = meth(gTransCls, "set_rotation", 1);
+            mFind   = meth(gTransCls, "Find", 1);
+            mGetChild   = meth(gTransCls, "GetChild", 1);
+            mChildCount = meth(gTransCls, "get_childCount", 0);
+            mCamMain = meth(gCamCls, "get_main", 0);
+            mW2S     = meth(gCamCls, "WorldToScreenPoint", 1);
+            mLookRot = meth(gQuatCls, "LookRotation", 2);
+            mSlerp   = meth(gQuatCls, "Slerp", 3);
+            gFindM   = meth(gObjCls, "FindObjectsOfType", 1);
+
             for (int i = 0; i < (int)(sizeof(kPlayerCls)/sizeof(*kPlayerCls)) && !gPlayerCls; i++)
               gPlayerCls = cls(kPlayerCls[i]);
             if (!gPlayerCls) return NULL;
             for (int i = 0; i < (int)(sizeof(kNpcCls)/sizeof(*kNpcCls)) && !gNpcCls; i++)
               gNpcCls = cls(kNpcCls[i]);
-
-            gObjCls = clsNS("UnityEngine", "Object");
-            if (gObjCls) gFindM = p_method_from_name(gObjCls, "FindObjectsOfType", 1);
 
             oTeam = off(gPlayerCls, "team");
             if (!oTeam) oTeam = off(gPlayerCls, "Team");
@@ -629,7 +670,7 @@ jobs:
               void *m = cls(kMgrCls[i]);
               if (!m) continue;
               for (int j = 0; j < (int)(sizeof(kLocalSt)/sizeof(*kLocalSt)); j++) {
-                if (p_field_from_name(m, kLocalSt[j])) {
+                if (p_class_get_field_from_name(m, kLocalSt[j])) {
                   gLocalCls = m;
                   strlcpy(gLocalF, kLocalSt[j], sizeof(gLocalF));
                   break;
@@ -649,14 +690,15 @@ jobs:
               _BSMenu *m = [_BSMenu new];
               gWin.rootViewController = m;
               [gWin makeKeyAndVisible];
-              m.link = [CADisplayLink displayLinkWithTarget:m selector:@selector(tick:)];
+              m.link = [CADisplayLink displayLinkWithTarget:m selector:@selector(frame:)];
+              m.link.preferredFramesPerSecond = 30;
               [m.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
             });
             return NULL;
           }
 
           __attribute__((constructor))
-          static void init(void) {
+          static void bsInit(void) {
             load();
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
                            dispatch_get_global_queue(0, 0), ^{ installAnti(); });
@@ -668,9 +710,21 @@ jobs:
 
       - name: build
         run: |
-          make package FINALPACKAGE=1 DEBUG=0 STRIP=1
+          set -o pipefail
+          make package FINALPACKAGE=1 DEBUG=0 STRIP=1 2>&1 | tee build.log
+
+      - name: errores
+        if: failure()
+        run: grep -n -m 40 -E "error:" build.log || true
 
       - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: build.log
+
+      - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: deb
           path: packages/*.deb
