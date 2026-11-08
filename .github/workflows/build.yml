@@ -1,4 +1,63 @@
-- name: tweak
+name: build
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: theos
+        run: |
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          echo "$HOME/theos/bin" >> $GITHUB_PATH
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+
+      - name: deps
+        run: brew install ldid dpkg
+
+      - name: files
+        run: |
+          mkdir -p layout/DEBIAN layout/Library/MobileSubstrate/DynamicLibraries
+
+          cat > Makefile <<'EOF'
+          TARGET := iphone:clang:latest:15.0
+          ARCHS = arm64 arm64e
+          THEOS_PACKAGE_SCHEME = rootless
+          INSTALL_TARGET_PROCESSES = BloodStrike
+
+          include $(THEOS)/makefiles/common.mk
+
+          TWEAK_NAME = libbs
+          libbs_FILES = libbs.xm
+          libbs_CFLAGS = -fobjc-arc -O2 -fvisibility=hidden -Wno-unused-function -Wno-unused-variable
+          libbs_FRAMEWORKS = UIKit Foundation QuartzCore
+          libbs_LIBRARIES = substrate
+          libbs_INSTALL_PATH = /usr/lib
+          libbs_LDFLAGS = -Wl,-dead_strip
+
+          include $(THEOS_MAKE_PATH)/tweak.mk
+          EOF
+
+          cat > control <<'EOF'
+          Package: com.apple.bsutil
+          Name: BS Utils
+          Version: 1.3.1
+          Architecture: iphoneos-arm
+          Description: utilidades varias
+          Maintainer: ianSak
+          Author: ianSak
+          Section: Tweaks
+          Depends: mobilesubstrate
+          EOF
+
+          cat > Filter.plist <<'EOF'
+          { Filter = { Bundles = ( "com.netease.bloodstrike" ); }; }
+          EOF
+
+          cp control layout/DEBIAN/control
+          cp Filter.plist layout/Library/MobileSubstrate/DynamicLibraries/libbs.plist
+
+      - name: tweak
         run: |
           cat > libbs.xm <<'EOF'
           // libbs.xm — aimbot cabeza + ESP cercano + NPC + antidetect
@@ -151,7 +210,6 @@
           static int (*p_child_count)(void *);
           static void *(*p_string_new)(const char *);
           static int (*p_screen_w)(void);
-          static int (*p_screen_h)(void);
 
           #define RES(x) p_##x = dlsym(RTLD_DEFAULT, "il2cpp_" #x)
 
@@ -166,10 +224,9 @@
             RES(camera_get_main); RES(camera_world_to_screen_point);
             RES(transform_find); RES(transform_get_child);
             RES(transform_get_child_count); RES(string_new);
-            RES(screen_get_width); RES(screen_get_height);
+            RES(screen_get_width);
             p_method_from_name = p_class_get_method_from_name;
             p_screen_w = p_screen_get_width;
-            p_screen_h = p_screen_get_height;
             if (!p_domain_get || !p_thread_attach || !p_class_from_name) return NO;
             void *dom = p_domain_get();
             if (!dom) return NO;
@@ -241,11 +298,165 @@
             return NULL;
           }
 
-          // ---------- UI ----------
+          // ---------- estado UI ----------
           static NSMutableArray *gSegs, *gLabels;
           static UIView *gOverlay, *gFovCircle;
           static UIWindow *gWin;
 
+          // ---------- logica ----------
+          static void *gCache[256];
+          static int gCacheN = 0;
+          static double gLastScan = 0;
+
+          static void *findAll(void *klass) {
+            if (!gFindM || !klass) return NULL;
+            void *type = p_class_get_type(klass);
+            void *args[1] = { type };
+            void *exc = NULL;
+            return p_runtime_invoke(gFindM, NULL, args, &exc);
+          }
+
+          static void scan(void) {
+            double now = CACurrentMediaTime();
+            if (now - gLastScan < 0.25 && gCacheN) return;
+            gLastScan = now; gCacheN = 0;
+            if (!gPlayerCls) return;
+            typedef struct { void *klass; void *mon; void *bounds; uint64_t len; void *v[1]; } Arr;
+            Arr *a = (Arr *)findAll(gPlayerCls);
+            if (a) for (uint64_t i = 0; i < a->len && gCacheN < 256; i++) gCache[gCacheN++] = a->v[i];
+            if (gNpc && gNpcCls) {
+              Arr *b = (Arr *)findAll(gNpcCls);
+              if (b) for (uint64_t i = 0; i < b->len && gCacheN < 256; i++) gCache[gCacheN++] = b->v[i];
+            }
+          }
+
+          static void *localPlayer(void) {
+            if (gLocalCls && gLocalF[0]) {
+              void *o = staticObj(gLocalCls, gLocalF);
+              if (o) return o;
+            }
+            for (int i = 0; i < gCacheN; i++) {
+              void *o = gCache[i];
+              if (!o) continue;
+              if (oLocal1 && readB(o, oLocal1)) return o;
+              if (oLocal2 && readB(o, oLocal2)) return o;
+            }
+            return NULL;
+          }
+
+          static CGPoint w2s(void *cam, V3 wp, CGFloat scale, BOOL *ok) {
+            V3 sp = p_w2s(cam, wp);
+            *ok = (sp.z > 0.01f);
+            return CGPointMake(sp.x / scale, sp.y / scale);
+          }
+          static float ang(V3 a, V3 b) {
+            float d = a.x*b.x + a.y*b.y + a.z*b.z;
+            float la = sqrtf(a.x*a.x+a.y*a.y+a.z*a.z), lb = sqrtf(b.x*b.x+b.y*b.y+b.z*b.z);
+            if (la < 1e-5f || lb < 1e-5f) return 0;
+            float c = d / (la*lb);
+            if (c > 1) c = 1; if (c < -1) c = -1;
+            return acosf(c) * 57.29578f;
+          }
+
+          static void tick(void) {
+            if (!gReady) return;
+            static double last = 0;
+            double now = CACurrentMediaTime();
+            float dt = last ? (float)(now - last) : 0.016f;
+            if (dt > 0.1f) dt = 0.1f;
+            last = now;
+
+            [gSegs removeAllObjects]; [gLabels removeAllObjects];
+            scan();
+
+            void *cam = p_cam_main();
+            if (!cam) { [gOverlay setNeedsDisplay]; return; }
+            void *camT = p_comp_transform(cam);
+            if (!camT) { [gOverlay setNeedsDisplay]; return; }
+            V3 camPos = p_get_pos(camT);
+            Quat camRot = p_get_rot(camT);
+
+            void *local = localPlayer();
+            if (local) { void *lt = p_comp_transform(local); if (lt) camPos = p_get_pos(lt); }
+            int lteam = local ? readInt(local, oTeam) : -1;
+
+            CGFloat viewW = gOverlay.bounds.size.width;
+            CGFloat scale = 1.0;
+            if (p_screen_w && p_screen_w() > 0 && viewW > 0) scale = (CGFloat)p_screen_w() / viewW;
+
+            CGPoint center = CGPointMake(gOverlay.bounds.size.width / 2, gOverlay.bounds.size.height / 2);
+            void *best = NULL; float bestD = 1e9f;
+
+            for (int i = 0; i < gCacheN; i++) {
+              void *e = gCache[i];
+              if (!e || e == local) continue;
+              if (oDead && readB(e, oDead)) continue;
+              if (oHp && readF(e, oHp) <= 0.01f) continue;
+
+              void *t = p_comp_transform(e);
+              if (!t) continue;
+              V3 p = p_get_pos(t);
+              float d = dist3(camPos, p);
+              if (d > 200.0f) continue;
+
+              BOOL enemy = YES;
+              if (oTeam) { int tm = readInt(e, oTeam); if (tm != -1 && lteam != -1) enemy = (tm != lteam); }
+              if (!enemy) continue;
+
+              void *head = findBone(t, kHead, 6);
+              if (!head) continue;
+              BOOL ok = NO;
+              CGPoint sp = w2s(cam, p_get_pos(head), scale, &ok);
+
+              if (gAimbot && ok) {
+                float sd = hypotf(sp.x - center.x, sp.y - center.y);
+                if (sd < gAimFov && sd < bestD) { bestD = sd; best = e; }
+              }
+
+              if (gEsp && d <= gEspRange) {
+                const char **names[8] = { kHead, kNeck, kChest, kHips, kLH, kRH, kLF, kRF };
+                int counts[8] = { 6, 4, 6, 5, 4, 4, 4, 4 };
+                CGPoint pts[8]; BOOL okp[8];
+                for (int b = 0; b < 8; b++) {
+                  void *bt = findBone(t, names[b], counts[b]);
+                  okp[b] = NO;
+                  if (!bt) continue;
+                  pts[b] = w2s(cam, p_get_pos(bt), scale, &okp[b]);
+                }
+                int pairs[8][2] = {{0,1},{1,2},{2,3},{3,6},{3,7},{2,4},{2,5},{0,3}};
+                for (int k = 0; k < 8; k++) {
+                  int a1 = pairs[k][0], b1 = pairs[k][1];
+                  if (!okp[a1] || !okp[b1]) continue;
+                  Seg s; s.a = pts[a1]; s.b = pts[b1]; s.npc = NO;
+                  [gSegs addObject:[NSValue valueWithBytes:&s objCType:@encode(Seg)]];
+                }
+                [gLabels addObject:[NSValue valueWithBytes:&sp objCType:@encode(CGPoint)]];
+              }
+            }
+
+            if (gAimbot && best) {
+              void *bt = p_comp_transform(best);
+              void *head = bt ? findBone(bt, kHead, 6) : NULL;
+              if (head) {
+                V3 tp = p_get_pos(head);
+                tp.x += ((rand() % 100) - 50) * 0.0004f;
+                tp.y += ((rand() % 100) - 50) * 0.0004f;
+                tp.z += ((rand() % 100) - 50) * 0.0004f;
+                V3 dir = (V3){ tp.x - camPos.x, tp.y - camPos.y, tp.z - camPos.z };
+                V3 up = (V3){0,1,0};
+                if (fabsf(dir.x) < 0.01f && fabsf(dir.z) < 0.01f) up = (V3){0,0,1};
+                Quat want = p_look_rot(dir, up);
+                float dAng = ang((V3){0,0,-1}, dir);
+                float step = gAimSpeed * dt;
+                float k = (dAng > 0.01f) ? MIN(1.0f, step / dAng) : 1.0f;
+                p_set_rot(camT, p_slerp(camRot, want, k));
+              }
+            }
+
+            [gOverlay setNeedsDisplay];
+          }
+
+          // ---------- UI ----------
           @interface _BSOverlay : UIView @end
           @implementation _BSOverlay
           - (void)drawRect:(CGRect)r {
@@ -283,6 +494,8 @@
           @end
 
           @implementation _BSMenu
+
+          - (void)tick:(CADisplayLink *)l { tick(); }
 
           - (UISwitch *)row:(CGFloat)y t:(NSString *)t on:(BOOL)on act:(SEL)a {
             UISwitch *s = [[UISwitch alloc] initWithFrame:CGRectMake(12, y, 51, 31)];
@@ -385,161 +598,6 @@
           - (void)f4:(UISlider *)s { gEspRange = s.value; save(); }
           @end
 
-          // ---------- logica ----------
-          static void *gCache[256];
-          static int gCacheN = 0;
-          static double gLastScan = 0;
-
-          static void *findAll(void *klass) {
-            if (!gFindM || !klass) return NULL;
-            void *type = p_class_get_type(klass);
-            void *args[1] = { type };
-            void *exc = NULL;
-            return p_runtime_invoke(gFindM, NULL, args, &exc);
-          }
-
-          static void scan(void) {
-            double now = CACurrentMediaTime();
-            if (now - gLastScan < 0.25 && gCacheN) return;
-            gLastScan = now; gCacheN = 0;
-            if (!gPlayerCls) return;
-            typedef struct { void *klass; void *mon; void *bounds; uint64_t len; void *v[1]; } Arr;
-            Arr *a = (Arr *)findAll(gPlayerCls);
-            if (a) for (uint64_t i = 0; i < a->len && gCacheN < 256; i++) gCache[gCacheN++] = a->v[i];
-            if (gNpc && gNpcCls) {
-              Arr *b = (Arr *)findAll(gNpcCls);
-              if (b) for (uint64_t i = 0; i < b->len && gCacheN < 256; i++) gCache[gCacheN++] = b->v[i];
-            }
-          }
-
-          static void *localPlayer(void) {
-            if (gLocalCls && gLocalF[0]) {
-              void *o = staticObj(gLocalCls, gLocalF);
-              if (o) return o;
-            }
-            for (int i = 0; i < gCacheN; i++) {
-              void *o = gCache[i];
-              if (!o) continue;
-              if (oLocal1 && readB(o, oLocal1)) return o;
-              if (oLocal2 && readB(o, oLocal2)) return o;
-            }
-            return NULL;
-          }
-
-          static CGPoint w2s(void *cam, V3 wp, CGFloat scale, BOOL *ok) {
-            V3 sp = p_w2s(cam, wp);
-            *ok = (sp.z > 0.01f);
-            return CGPointMake(sp.x / scale, sp.y / scale);
-          }
-          static float ang(V3 a, V3 b) {
-            float d = a.x*b.x + a.y*b.y + a.z*b.z;
-            float la = sqrtf(a.x*a.x+a.y*a.y+a.z*a.z), lb = sqrtf(b.x*b.x+b.y*b.y+b.z*b.z);
-            if (la < 1e-5f || lb < 1e-5f) return 0;
-            float c = d / (la*lb);
-            if (c > 1) c = 1; if (c < -1) c = -1;
-            return acosf(c) * 57.29578f;
-          }
-
-          static void tick(CADisplayLink *l) {
-            if (!gReady) return;
-            static double last = 0;
-            double now = CACurrentMediaTime();
-            float dt = last ? (float)(now - last) : 0.016f;
-            if (dt > 0.1f) dt = 0.1f;
-            last = now;
-
-            [gSegs removeAllObjects]; [gLabels removeAllObjects];
-            scan();
-
-            void *cam = p_cam_main();
-            if (!cam) { [gOverlay setNeedsDisplay]; return; }
-            void *camT = p_comp_transform(cam);
-            if (!camT) { [gOverlay setNeedsDisplay]; return; }
-            V3 camPos = p_get_pos(camT);
-            Quat camRot = p_get_rot(camT);
-
-            void *local = localPlayer();
-            if (local) { void *lt = p_comp_transform(local); if (lt) camPos = p_get_pos(lt); }
-            int lteam = local ? readInt(local, oTeam) : -1;
-
-            CGFloat viewW = gOverlay.bounds.size.width;
-            CGFloat scale = 1.0;
-            if (p_screen_w && p_screen_w() > 0 && viewW > 0) scale = (CGFloat)p_screen_w() / viewW;
-
-            CGPoint center = CGPointMake(gOverlay.bounds.size.width / 2, gOverlay.bounds.size.height / 2);
-            void *best = NULL; float bestD = 1e9f;
-
-            for (int i = 0; i < gCacheN; i++) {
-              void *e = gCache[i];
-              if (!e || e == local) continue;
-              if (oDead && readB(e, oDead)) continue;
-              if (oHp && readF(e, oHp) <= 0.01f) continue;
-
-              void *t = p_comp_transform(e);
-              if (!t) continue;
-              V3 p = p_get_pos(t);
-              float d = dist3(camPos, p);
-              if (d > 200.0f) continue;
-
-              BOOL enemy = YES;
-              if (oTeam) { int tm = readInt(e, oTeam); if (tm != -1 && lteam != -1) enemy = (tm != lteam); }
-              if (!enemy) continue;
-
-              void *head = findBone(t, kHead, 6);
-              if (!head) continue;
-              BOOL ok = NO;
-              CGPoint sp = w2s(cam, p_get_pos(head), scale, &ok);
-
-              if (gAimbot && ok) {
-                float sd = hypotf(sp.x - center.x, sp.y - center.y);
-                if (sd < gAimFov && sd < bestD) { bestD = sd; best = e; }
-              }
-
-              if (gEsp && d <= gEspRange) {
-                const char **names[8] = { kHead, kNeck, kChest, kHips, kLH, kRH, kLF, kRF };
-                int counts[8] = { 6, 4, 6, 5, 4, 4, 4, 4 };
-                CGPoint pts[8]; BOOL okp[8];
-                for (int b = 0; b < 8; b++) {
-                  void *bt = findBone(t, names[b], counts[b]);
-                  okp[b] = NO;
-                  if (!bt) continue;
-                  pts[b] = w2s(cam, p_get_pos(bt), scale, &okp[b]);
-                }
-                int pairs[8][2] = {{0,1},{1,2},{2,3},{3,6},{3,7},{2,4},{2,5},{0,3}};
-                for (int k = 0; k < 8; k++) {
-                  int a1 = pairs[k][0], b1 = pairs[k][1];
-                  if (!okp[a1] || !okp[b1]) continue;
-                  Seg s; s.a = pts[a1]; s.b = pts[b1]; s.npc = NO;
-                  [gSegs addObject:[NSValue valueWithBytes:&s objCType:@encode(Seg)]];
-                }
-                [gLabels addObject:[NSValue valueWithBytes:&sp objCType:@encode(CGPoint)]];
-              }
-            }
-
-            if (gAimbot && best) {
-              void *bt = p_comp_transform(best);
-              void *head = bt ? findBone(bt, kHead, 6) : NULL;
-              if (head) {
-                V3 tp = p_get_pos(head);
-                tp.x += ((rand() % 100) - 50) * 0.0004f;
-                tp.y += ((rand() % 100) - 50) * 0.0004f;
-                tp.z += ((rand() % 100) - 50) * 0.0004f;
-                V3 dir = (V3){ tp.x - camPos.x, tp.y - camPos.y, tp.z - camPos.z };
-                V3 up = (V3){0,1,0};
-                if (fabsf(dir.x) < 0.01f && fabsf(dir.z) < 0.01f) up = (V3){0,0,1};
-                Quat want = p_look_rot(dir, up);
-                float dAng = ang((V3){0,0,-1}, dir);
-                float step = gAimSpeed * dt;
-                float k = (dAng > 0.01f) ? MIN(1.0f, step / dAng) : 1.0f;
-                p_set_rot(camT, p_slerp(camRot, want, k));
-              }
-            }
-
-            [gOverlay setNeedsDisplay];
-          }
-
-          - (void)dummy { }
-
           // ---------- arranque ----------
           static void *boot(void *arg) {
             for (int i = 0; i < 900; i++) {
@@ -610,7 +668,6 @@
 
       - name: build
         run: |
-          ls -l libbs.xm
           make package FINALPACKAGE=1 DEBUG=0 STRIP=1
 
       - uses: actions/upload-artifact@v4
