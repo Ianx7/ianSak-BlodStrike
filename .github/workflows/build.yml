@@ -10,20 +10,22 @@ jobs:
         run: |
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "$HOME/theos/bin" >> $GITHUB_PATH
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          git clone --depth 1 --recursive https://github.com/theos/theos.git $HOME/theos
 
       - name: deps
-        run: brew install ldid dpkg
+        run: |
+          brew install ldid
+          brew install dpkg || true
 
       - name: fishhook
+        continue-on-error: true
         run: |
-          curl -fsSL -o fishhook.h https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.h
-          curl -fsSL -o fishhook.c https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.c
+          curl -fsSL -o fishhook.h https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.h || rm -f fishhook.h
+          curl -fsSL -o fishhook.c https://raw.githubusercontent.com/facebook/fishhook/main/fishhook.c || rm -f fishhook.c
 
       - name: files
         run: |
           mkdir -p layout/DEBIAN layout/Library/MobileSubstrate/DynamicLibraries
-
           cat > Makefile <<'EOF'
           TARGET := iphone:clang:latest:15.0
           ARCHS = arm64 arm64e
@@ -33,42 +35,37 @@ jobs:
           include $(THEOS)/makefiles/common.mk
 
           TWEAK_NAME = libbs
-          libbs_FILES = libbs.xm fishhook.c
-          libbs_CFLAGS = -fobjc-arc -O2 -fvisibility=hidden -Wno-unused-function -Wno-unused-variable -Wno-nullability-completeness
+          libbs_FILES = libbs.xm $(wildcard fishhook.c)
+          libbs_CFLAGS = -fobjc-arc -O2 -fvisibility=hidden -Wno-everything
           libbs_FRAMEWORKS = UIKit Foundation QuartzCore
           libbs_INSTALL_PATH = /usr/lib
           libbs_LDFLAGS = -Wl,-dead_strip
 
           include $(THEOS_MAKE_PATH)/tweak.mk
           EOF
-
           cat > control <<'EOF'
           Package: com.apple.bsutil
           Name: BS Utils
-          Version: 1.5.0
+          Version: 1.6.0
           Architecture: iphoneos-arm
           Description: utilidades varias
           Maintainer: ianSak
           Author: ianSak
           Section: Tweaks
-          Depends: firmware (>= 15.0)
+          Depends: mobilesubstrate
           EOF
-
           cat > Filter.plist <<'EOF'
           { Filter = { Bundles = ( "com.netease.bloodstrike" ); }; }
           EOF
-
           cp control layout/DEBIAN/control
           cp Filter.plist layout/Library/MobileSubstrate/DynamicLibraries/libbs.plist
 
       - name: tweak
         run: |
           cat > libbs.xm <<'EOF'
-          // libbs.xm
           #import <UIKit/UIKit.h>
           #import <Foundation/Foundation.h>
           #import <objc/runtime.h>
-          #import <objc/message.h>
           #import <dlfcn.h>
           #import <mach-o/dyld.h>
           #import <mach-o/loader.h>
@@ -84,35 +81,28 @@ jobs:
           #import <math.h>
           #import <pthread.h>
           #import <QuartzCore/QuartzCore.h>
+          #if __has_include("fishhook.h")
           #import "fishhook.h"
+          #define HAVE_FH 1
+          #endif
 
           typedef struct { float x, y, z; } V3;
           typedef struct { float x, y, z, w; } Quat;
-          typedef struct { CGPoint a, b; BOOL npc; } Seg;
+          typedef struct { CGPoint a, b; } Seg;
 
-          static BOOL  gAimbot   = YES;
-          static BOOL  gEsp      = YES;
-          static BOOL  gNpc      = YES;
-          static BOOL  gAnti     = YES;
-          static BOOL  gShowFov  = YES;
-          static float gAimFov   = 120.0f;
-          static float gCamFov   = 90.0f;
-          static float gAimSpeed = 420.0f;
-          static float gEspRange = 60.0f;
-          static BOOL  gReady    = NO;
+          static BOOL gAimbot = YES, gEsp = YES, gNpc = YES, gAnti = YES, gShowFov = YES, gReady = NO;
+          static float gAimFov = 120.0f, gCamFov = 90.0f, gAimSpeed = 420.0f, gEspRange = 60.0f;
 
           static NSUserDefaults *defs(void) {
-            static NSUserDefaults *d;
-            static dispatch_once_t o;
+            static NSUserDefaults *d; static dispatch_once_t o;
             dispatch_once(&o, ^{ d = [[NSUserDefaults alloc] initWithSuiteName:@"com.apple.bsutil"]; });
             return d;
           }
           static void save(void) {
             NSUserDefaults *d = defs();
             [d setBool:gAimbot forKey:@"a"]; [d setBool:gEsp forKey:@"e"];
-            [d setBool:gNpc forKey:@"n"];    [d setBool:gAnti forKey:@"t"];
-            [d setBool:gShowFov forKey:@"f"];
-            [d setFloat:gAimFov forKey:@"af"]; [d setFloat:gCamFov forKey:@"cf"];
+            [d setBool:gNpc forKey:@"n"]; [d setBool:gAnti forKey:@"t"];
+            [d setBool:gShowFov forKey:@"f"]; [d setFloat:gAimFov forKey:@"af"];
             [d setFloat:gAimSpeed forKey:@"as"]; [d setFloat:gEspRange forKey:@"er"];
             [d synchronize];
           }
@@ -120,21 +110,17 @@ jobs:
             NSUserDefaults *d = defs();
             if ([d objectForKey:@"a"]) {
               gAimbot = [d boolForKey:@"a"]; gEsp = [d boolForKey:@"e"];
-              gNpc = [d boolForKey:@"n"];    gAnti = [d boolForKey:@"t"];
-              gShowFov = [d boolForKey:@"f"];
-              gAimFov = [d floatForKey:@"af"]; gCamFov = [d floatForKey:@"cf"];
+              gNpc = [d boolForKey:@"n"]; gAnti = [d boolForKey:@"t"];
+              gShowFov = [d boolForKey:@"f"]; gAimFov = [d floatForKey:@"af"];
               gAimSpeed = [d floatForKey:@"as"]; gEspRange = [d floatForKey:@"er"];
             }
           }
 
-          // ---------- antidetect ----------
           static const char *kHide[] = {
-            "libbs.dylib", "com.apple.bsutil", "ianSak",
-            "/var/jb", "/jb/", "/usr/lib/libsubstrate", "/usr/lib/libellekit",
-            "/usr/lib/libhooker", "/usr/lib/TweakInject", "/Library/MobileSubstrate",
-            "/usr/lib/libzhuowei", "/usr/sbin/frida-server", "/usr/bin/cycript",
-            "/.installed_unc0ver", "/.bootstrapped", "/var/lib/dpkg",
-            "/private/var/lib/dpkg", "/usr/lib/libjailbreak"
+            "libbs.dylib", "com.apple.bsutil", "/var/jb", "/usr/lib/libsubstrate",
+            "/usr/lib/libellekit", "/usr/lib/libhooker", "/usr/lib/TweakInject",
+            "/Library/MobileSubstrate", "/usr/sbin/frida-server", "/usr/bin/cycript",
+            "/.installed_unc0ver", "/var/lib/dpkg", "/private/var/lib/dpkg"
           };
           static BOOL hidden(const char *p) {
             if (!p) return NO;
@@ -142,7 +128,6 @@ jobs:
               if (strstr(p, kHide[i])) return YES;
             return NO;
           }
-
           static int (*o_stat)(const char *, struct stat *);
           static int (*o_lstat)(const char *, struct stat *);
           static int (*o_access)(const char *, int);
@@ -150,10 +135,6 @@ jobs:
           static FILE *(*o_fopen)(const char *, const char *);
           static DIR *(*o_opendir)(const char *);
           static char *(*o_getenv)(const char *);
-          static uint32_t (*o_icount)(void);
-          static const char *(*o_iname)(uint32_t);
-          static int gMyImg = -1;
-
           static int h_stat(const char *p, struct stat *b) { if (hidden(p)) { errno = ENOENT; return -1; } return o_stat(p, b); }
           static int h_lstat(const char *p, struct stat *b) { if (hidden(p)) { errno = ENOENT; return -1; } return o_lstat(p, b); }
           static int h_access(const char *p, int m) { if (hidden(p)) { errno = ENOENT; return -1; } return o_access(p, m); }
@@ -164,36 +145,44 @@ jobs:
             if (k && !strcmp(k, "DYLD_INSERT_LIBRARIES")) return NULL;
             return o_getenv(k);
           }
-          static uint32_t h_icount(void) {
-            uint32_t n = o_icount();
-            return (gMyImg >= 0 && (uint32_t)gMyImg < n) ? n - 1 : n;
-          }
-          static const char *h_iname(uint32_t i) {
-            if (gMyImg >= 0 && (int)i >= gMyImg) return o_iname(i + 1);
-            return o_iname(i);
-          }
-
-          static void installAnti(void) {
-            if (!gAnti) return;
+          static void hideSelf(void) {
+            int idx = -1;
             for (uint32_t i = 0; i < _dyld_image_count(); i++) {
               const char *n = _dyld_get_image_name(i);
-              if (n && strstr(n, "libbs.dylib")) { gMyImg = (int)i; break; }
+              if (n && strstr(n, "libbs.dylib")) { idx = (int)i; break; }
             }
+            if (idx < 0) return;
+            const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(idx);
+            if (!h) return;
+            uintptr_t p = (uintptr_t)h + sizeof(*h);
+            for (uint32_t i = 0; i < h->ncmds; i++) {
+              struct load_command *lc = (struct load_command *)p;
+              if (lc->cmd == LC_ID_DYLIB) {
+                struct dylib_command *dc = (struct dylib_command *)lc;
+                char *name = (char *)((uintptr_t)dc + dc->dylib.name.offset);
+                if (strlen(name) >= 20) strcpy(name, "/usr/lib/libz.dylib");
+                break;
+              }
+              p += lc->cmdsize;
+            }
+          }
+          static void installAnti(void) {
+            if (!gAnti) return;
+            hideSelf();
+          #ifdef HAVE_FH
             struct rebinding r[] = {
-              { "stat",   (void *)h_stat,   (void **)&o_stat },
-              { "lstat",  (void *)h_lstat,  (void **)&o_lstat },
+              { "stat", (void *)h_stat, (void **)&o_stat },
+              { "lstat", (void *)h_lstat, (void **)&o_lstat },
               { "access", (void *)h_access, (void **)&o_access },
-              { "open",   (void *)h_open,   (void **)&o_open },
-              { "fopen",  (void *)h_fopen,  (void **)&o_fopen },
-              { "opendir",(void *)h_opendir,(void **)&o_opendir },
-              { "getenv", (void *)h_getenv, (void **)&o_getenv },
-              { "_dyld_image_count",    (void *)h_icount, (void **)&o_icount },
-              { "_dyld_get_image_name", (void *)h_iname,  (void **)&o_iname }
+              { "open", (void *)h_open, (void **)&o_open },
+              { "fopen", (void *)h_fopen, (void **)&o_fopen },
+              { "opendir", (void *)h_opendir, (void **)&o_opendir },
+              { "getenv", (void *)h_getenv, (void **)&o_getenv }
             };
             rebind_symbols(r, sizeof(r)/sizeof(r[0]));
+          #endif
           }
 
-          // ---------- il2cpp ----------
           static void *(*p_domain_get)(void);
           static void *(*p_thread_attach)(void *);
           static void **(*p_domain_get_assemblies)(void *, uint32_t *);
@@ -207,9 +196,7 @@ jobs:
           static void *(*p_runtime_invoke)(void *, void *, void **, void **);
           static void *(*p_object_unbox)(void *);
           static void *(*p_string_new)(const char *);
-
           #define RES(x) p_##x = dlsym(RTLD_DEFAULT, "il2cpp_" #x)
-
           static BOOL resolveIl2Cpp(void) {
             RES(domain_get); RES(thread_attach); RES(domain_get_assemblies);
             RES(assembly_get_image); RES(class_from_name); RES(class_get_field_from_name);
@@ -223,7 +210,6 @@ jobs:
             p_thread_attach(dom);
             return YES;
           }
-
           static void *clsNS(const char *ns, const char *name) {
             uint32_t n = 0;
             void **asms = p_domain_get_assemblies(p_domain_get(), &n);
@@ -237,9 +223,7 @@ jobs:
             return NULL;
           }
           static void *cls(const char *n) { return clsNS("", n); }
-          static void *meth(void *k, const char *n, int c) {
-            return k ? p_class_get_method_from_name(k, n, c) : NULL;
-          }
+          static void *meth(void *k, const char *n, int c) { return k ? p_class_get_method_from_name(k, n, c) : NULL; }
           static void *invoke(void *m, void *obj, void **args) {
             if (!m) return NULL;
             void *exc = NULL;
@@ -257,68 +241,38 @@ jobs:
           static int readInt(void *o, size_t f) { return f ? *(int *)((char *)o + f) : -1; }
           static float readF(void *o, size_t f) { return f ? *(float *)((char *)o + f) : 1.0f; }
           static BOOL readB(void *o, size_t f) { return f ? *(BOOL *)((char *)o + f) : NO; }
-          static float dist3(V3 a, V3 b) {
-            float dx=a.x-b.x, dy=a.y-b.y, dz=a.z-b.z;
-            return sqrtf(dx*dx+dy*dy+dz*dz);
-          }
+          static float dist3(V3 a, V3 b) { return sqrtf((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y)+(a.z-b.z)*(a.z-b.z)); }
 
           static void *gCompCls, *gTransCls, *gCamCls, *gQuatCls, *gObjCls;
-          static void *mCompTransform, *mGetPos, *mGetRot, *mSetRot;
-          static void *mFind, *mGetChild, *mChildCount;
-          static void *mCamMain, *mW2S, *mLookRot, *mSlerp;
-
+          static void *mCompTransform, *mGetPos, *mGetRot, *mSetRot, *mFind, *mGetChild, *mChildCount, *mCamMain, *mW2S, *mLookRot, *mSlerp;
           static void *compTransform(void *c) { return invoke(mCompTransform, c, NULL); }
-          static V3 getPos(void *t) {
-            void *r = invoke(mGetPos, t, NULL);
-            return r ? *(V3 *)p_object_unbox(r) : (V3){0,0,0};
-          }
-          static Quat getRot(void *t) {
-            void *r = invoke(mGetRot, t, NULL);
-            return r ? *(Quat *)p_object_unbox(r) : (Quat){0,0,0,1};
-          }
+          static V3 getPos(void *t) { void *r = invoke(mGetPos, t, NULL); return r ? *(V3 *)p_object_unbox(r) : (V3){0,0,0}; }
+          static Quat getRot(void *t) { void *r = invoke(mGetRot, t, NULL); return r ? *(Quat *)p_object_unbox(r) : (Quat){0,0,0,1}; }
           static void setRot(void *t, Quat q) { void *a[1] = { &q }; invoke(mSetRot, t, a); }
           static void *camMain(void) { return invoke(mCamMain, NULL, NULL); }
-          static V3 w2sRaw(void *cam, V3 wp) {
-            void *a[1] = { &wp };
-            void *r = invoke(mW2S, cam, a);
-            return r ? *(V3 *)p_object_unbox(r) : (V3){0,0,0};
-          }
-          static void *findChild(void *t, const char *n) {
-            void *a[1] = { p_string_new(n) };
-            return invoke(mFind, t, a);
-          }
+          static V3 w2sRaw(void *cam, V3 wp) { void *a[1] = { &wp }; void *r = invoke(mW2S, cam, a); return r ? *(V3 *)p_object_unbox(r) : (V3){0,0,0}; }
+          static void *findChild(void *t, const char *n) { void *a[1] = { p_string_new(n) }; return invoke(mFind, t, a); }
           static void *getChild(void *t, int i) { void *a[1] = { &i }; return invoke(mGetChild, t, a); }
-          static int childCount(void *t) {
-            void *r = invoke(mChildCount, t, NULL);
-            return r ? *(int *)p_object_unbox(r) : 0;
-          }
-          static Quat lookRot(V3 d, V3 u) {
-            void *a[2] = { &d, &u };
-            void *r = invoke(mLookRot, NULL, a);
-            return r ? *(Quat *)p_object_unbox(r) : (Quat){0,0,0,1};
-          }
-          static Quat slerpQ(Quat a, Quat b, float t) {
-            void *ar[3] = { &a, &b, &t };
-            void *r = invoke(mSlerp, NULL, ar);
-            return r ? *(Quat *)p_object_unbox(r) : a;
-          }
+          static int childCount(void *t) { void *r = invoke(mChildCount, t, NULL); return r ? *(int *)p_object_unbox(r) : 0; }
+          static Quat lookRot(V3 d, V3 u) { void *a[2] = { &d, &u }; void *r = invoke(mLookRot, NULL, a); return r ? *(Quat *)p_object_unbox(r) : (Quat){0,0,0,1}; }
+          static Quat slerpQ(Quat a, Quat b, float t) { void *ar[3] = { &a, &b, &t }; void *r = invoke(mSlerp, NULL, ar); return r ? *(Quat *)p_object_unbox(r) : a; }
 
           static const char *kPlayerCls[] = { "Player","PlayerController","BasePlayer","Character","Avatar","Actor","Entity" };
-          static const char *kNpcCls[]    = { "NPC","Bot","AIBot","Monster","Enemy" };
-          static const char *kMgrCls[]    = { "PlayerManager","GameManager","MatchManager" };
-          static const char *kLocalSt[]   = { "localPlayer","LocalPlayer","myPlayer","self","_localPlayer" };
-          static const char *kHead[]  = { "Head","head","mixamorig:Head","Bip01 Head","Head_Jnt","head_jnt" };
-          static const char *kNeck[]  = { "Neck","neck","mixamorig:Neck","Bip01 Neck" };
-          static const char *kChest[] = { "Chest","chest","UpperChest","mixamorig:Spine2","Spine1","Spine" };
-          static const char *kHips[]  = { "Hips","hips","Pelvis","mixamorig:Hips","Bip01 Pelvis" };
-          static const char *kLH[]    = { "LeftHand","hand_l","mixamorig:LeftHand","Bip01 L Hand" };
-          static const char *kRH[]    = { "RightHand","hand_r","mixamorig:RightHand","Bip01 R Hand" };
-          static const char *kLF[]    = { "LeftFoot","foot_l","mixamorig:LeftFoot","Bip01 L Foot" };
-          static const char *kRF[]    = { "RightFoot","foot_r","mixamorig:RightFoot","Bip01 R Foot" };
+          static const char *kNpcCls[] = { "NPC","Bot","AIBot","Monster","Enemy" };
+          static const char *kMgrCls[] = { "PlayerManager","GameManager","MatchManager" };
+          static const char *kLocalSt[] = { "localPlayer","LocalPlayer","myPlayer","self" };
+          static const char *kHead[] = { "Head","head","mixamorig:Head","Bip01 Head","Head_Jnt" };
+          static const char *kNeck[] = { "Neck","neck","mixamorig:Neck","Bip01 Neck" };
+          static const char *kChest[] = { "Chest","chest","UpperChest","mixamorig:Spine2","Spine" };
+          static const char *kHips[] = { "Hips","hips","Pelvis","mixamorig:Hips" };
+          static const char *kLH[] = { "LeftHand","hand_l","mixamorig:LeftHand" };
+          static const char *kRH[] = { "RightHand","hand_r","mixamorig:RightHand" };
+          static const char *kLF[] = { "LeftFoot","foot_l","mixamorig:LeftFoot" };
+          static const char *kRF[] = { "RightFoot","foot_r","mixamorig:RightFoot" };
 
-          static void *gPlayerCls, *gNpcCls, *gFindM;
+          static void *gPlayerCls, *gNpcCls, *gFindM, *gLocalCls;
           static size_t oTeam, oHp, oDead, oLocal1, oLocal2;
-          static void *gLocalCls; static char gLocalF[32];
+          static char gLocalF[32];
 
           static void *findBoneRec(void *t, const char *name, int depth) {
             if (!t || depth > 7) return NULL;
@@ -339,7 +293,6 @@ jobs:
           static NSMutableArray *gSegs, *gLabels;
           static UIView *gOverlay, *gFovCircle;
           static UIWindow *gWin;
-
           static void *gCache[256];
           static int gCacheN = 0;
           static double gLastScan = 0;
@@ -349,7 +302,6 @@ jobs:
             void *a[1] = { p_class_get_type(klass) };
             return invoke(gFindM, NULL, a);
           }
-
           static void scan(void) {
             double now = CACurrentMediaTime();
             if (now - gLastScan < 0.25 && gCacheN) return;
@@ -363,12 +315,8 @@ jobs:
               if (b) for (uint64_t i = 0; i < b->len && gCacheN < 256; i++) gCache[gCacheN++] = b->v[i];
             }
           }
-
           static void *localPlayer(void) {
-            if (gLocalCls && gLocalF[0]) {
-              void *o = staticObj(gLocalCls, gLocalF);
-              if (o) return o;
-            }
+            if (gLocalCls && gLocalF[0]) { void *o = staticObj(gLocalCls, gLocalF); if (o) return o; }
             for (int i = 0; i < gCacheN; i++) {
               void *o = gCache[i];
               if (!o) continue;
@@ -377,7 +325,6 @@ jobs:
             }
             return NULL;
           }
-
           static CGPoint w2sP(void *cam, V3 wp, CGFloat scale, BOOL *ok) {
             V3 sp = w2sRaw(cam, wp);
             *ok = (sp.z > 0.01f);
@@ -399,54 +346,44 @@ jobs:
             float dt = last ? (float)(now - last) : 0.033f;
             if (dt > 0.2f) dt = 0.2f;
             last = now;
-
             [gSegs removeAllObjects]; [gLabels removeAllObjects];
             scan();
-
             void *cam = camMain();
             if (!cam) { [gOverlay setNeedsDisplay]; return; }
             void *camT = compTransform(cam);
             if (!camT) { [gOverlay setNeedsDisplay]; return; }
             V3 camPos = getPos(camT);
             Quat camRot = getRot(camT);
-
             void *local = localPlayer();
             if (local) { void *lt = compTransform(local); if (lt) camPos = getPos(lt); }
             int lteam = local ? readInt(local, oTeam) : -1;
-
             CGFloat scale = UIScreen.mainScreen.nativeScale;
             if (scale < 1.0) scale = 1.0;
             CGPoint center = CGPointMake(gOverlay.bounds.size.width / 2, gOverlay.bounds.size.height / 2);
             void *best = NULL; float bestD = 1e9f;
-
             for (int i = 0; i < gCacheN; i++) {
               void *e = gCache[i];
               if (!e || e == local) continue;
               if (oDead && readB(e, oDead)) continue;
               if (oHp && readF(e, oHp) <= 0.01f) continue;
-
               void *t = compTransform(e);
               if (!t) continue;
               float d = dist3(camPos, getPos(t));
               if (d > 200.0f) continue;
-
               BOOL enemy = YES;
               if (oTeam) { int tm = readInt(e, oTeam); if (tm != -1 && lteam != -1) enemy = (tm != lteam); }
               if (!enemy) continue;
-
-              void *head = findBone(t, kHead, 6);
+              void *head = findBone(t, kHead, 5);
               if (!head) continue;
               BOOL ok = NO;
               CGPoint sp = w2sP(cam, getPos(head), scale, &ok);
-
               if (gAimbot && ok) {
                 float sd = hypotf(sp.x - center.x, sp.y - center.y);
                 if (sd < gAimFov && sd < bestD) { bestD = sd; best = e; }
               }
-
               if (gEsp && d <= gEspRange) {
                 const char **nm[8] = { kHead, kNeck, kChest, kHips, kLH, kRH, kLF, kRF };
-                int cnt[8] = { 6, 4, 6, 5, 4, 4, 4, 4 };
+                int cnt[8] = { 5, 4, 5, 4, 3, 3, 3, 3 };
                 CGPoint pts[8]; BOOL okp[8];
                 for (int b = 0; b < 8; b++) {
                   void *bt = findBone(t, nm[b], cnt[b]);
@@ -458,16 +395,15 @@ jobs:
                 for (int k = 0; k < 8; k++) {
                   int a1 = pr[k][0], b1 = pr[k][1];
                   if (!okp[a1] || !okp[b1]) continue;
-                  Seg s; s.a = pts[a1]; s.b = pts[b1]; s.npc = NO;
+                  Seg s; s.a = pts[a1]; s.b = pts[b1];
                   [gSegs addObject:[NSValue valueWithBytes:&s objCType:@encode(Seg)]];
                 }
                 [gLabels addObject:[NSValue valueWithBytes:&sp objCType:@encode(CGPoint)]];
               }
             }
-
             if (gAimbot && best) {
               void *bt = compTransform(best);
-              void *head = bt ? findBone(bt, kHead, 6) : NULL;
+              void *head = bt ? findBone(bt, kHead, 5) : NULL;
               if (head) {
                 V3 tp = getPos(head);
                 tp.x += ((rand() % 100) - 50) * 0.0004f;
@@ -482,28 +418,20 @@ jobs:
                 setRot(camT, slerpQ(camRot, lookRot(dir, up), k));
               }
             }
-
             [gOverlay setNeedsDisplay];
           }
 
-          // ---------- UI ----------
           @interface _BSOverlay : UIView @end
           @implementation _BSOverlay
           - (void)drawRect:(CGRect)r {
             CGContextRef c = UIGraphicsGetCurrentContext();
             CGContextSetLineWidth(c, 1.4);
+            CGContextSetStrokeColorWithColor(c, [UIColor redColor].CGColor);
             for (NSValue *v in gSegs) {
               Seg s; [v getValue:&s];
-              CGContextSetStrokeColorWithColor(c, (s.npc ? [UIColor yellowColor] : [UIColor redColor]).CGColor);
               CGContextMoveToPoint(c, s.a.x, s.a.y);
               CGContextAddLineToPoint(c, s.b.x, s.b.y);
               CGContextStrokePath(c);
-            }
-            NSDictionary *at = @{ NSFontAttributeName: [UIFont boldSystemFontOfSize:10],
-                                  NSForegroundColorAttributeName: [UIColor whiteColor] };
-            for (NSValue *v in gLabels) {
-              CGPoint p; [v getValue:&p];
-              [@"●" drawAtPoint:p withAttributes:at];
             }
           }
           @end
@@ -524,7 +452,6 @@ jobs:
           @end
 
           @implementation _BSMenu
-
           - (void)frame:(CADisplayLink *)l { tick(); }
 
           - (UISwitch *)row:(CGFloat)y t:(NSString *)t on:(BOOL)on act:(SEL)a {
@@ -553,12 +480,10 @@ jobs:
             [super viewDidLoad];
             self.view.backgroundColor = [UIColor clearColor];
             gSegs = [NSMutableArray array]; gLabels = [NSMutableArray array];
-
             gOverlay = [[_BSOverlay alloc] initWithFrame:self.view.bounds];
             gOverlay.backgroundColor = [UIColor clearColor];
             gOverlay.userInteractionEnabled = NO;
             [self.view addSubview:gOverlay];
-
             gFovCircle = [[UIView alloc] initWithFrame:CGRectMake(0, 0, gAimFov * 2, gAimFov * 2)];
             gFovCircle.center = self.view.center;
             gFovCircle.layer.borderColor = [UIColor redColor].CGColor;
@@ -567,7 +492,6 @@ jobs:
             gFovCircle.hidden = !gShowFov;
             gFovCircle.userInteractionEnabled = NO;
             [self.view addSubview:gFovCircle];
-
             _fab = [UIButton buttonWithType:UIButtonTypeSystem];
             _fab.frame = CGRectMake(12, 120, 54, 54);
             _fab.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.7];
@@ -577,32 +501,26 @@ jobs:
             [_fab addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
             [_fab addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)]];
             [self.view addSubview:_fab];
-
             _panel = [[UIView alloc] initWithFrame:CGRectMake(12, 184, 260, 470)];
             _panel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.9];
             _panel.layer.cornerRadius = 14;
             _panel.hidden = YES;
             [self.view addSubview:_panel];
-
             UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, 240, 20)];
             t.text = @"iS — BLOOD STRIKE"; t.textColor = [UIColor redColor];
             t.font = [UIFont boldSystemFontOfSize:14];
             [_panel addSubview:t];
-
-            [self row:36  t:@"Aimbot (cabeza)" on:gAimbot  act:@selector(a1:)];
-            [self row:72  t:@"ESP esqueleto"   on:gEsp     act:@selector(a2:)];
-            [self row:108 t:@"NPCs"            on:gNpc     act:@selector(a3:)];
-            [self row:144 t:@"Anti-deteccion"  on:gAnti    act:@selector(a4:)];
-            [self row:180 t:@"Mostrar FOV"     on:gShowFov act:@selector(a5:)];
-
+            [self row:36 t:@"Aimbot (cabeza)" on:gAimbot act:@selector(a1:)];
+            [self row:72 t:@"ESP esqueleto" on:gEsp act:@selector(a2:)];
+            [self row:108 t:@"NPCs" on:gNpc act:@selector(a3:)];
+            [self row:144 t:@"Anti-deteccion" on:gAnti act:@selector(a4:)];
+            [self row:180 t:@"Mostrar FOV" on:gShowFov act:@selector(a5:)];
             [self cap:216 t:[NSString stringWithFormat:@"FOV aim: %.0f", gAimFov]];
             [self sld:236 lo:30 hi:250 v:gAimFov act:@selector(f1:)];
-            [self cap:274 t:[NSString stringWithFormat:@"Cam FOV: %.0f", gCamFov]];
-            [self sld:296 lo:60 hi:130 v:gCamFov act:@selector(f2:)];
-            [self cap:334 t:@"Velocidad aim"];
-            [self sld:356 lo:60 hi:900 v:gAimSpeed act:@selector(f3:)];
-            [self cap:394 t:[NSString stringWithFormat:@"Rango ESP: %.0fm", gEspRange]];
-            [self sld:416 lo:10 hi:200 v:gEspRange act:@selector(f4:)];
+            [self cap:274 t:@"Velocidad aim"];
+            [self sld:296 lo:60 hi:900 v:gAimSpeed act:@selector(f2:)];
+            [self cap:334 t:[NSString stringWithFormat:@"Rango ESP: %.0fm", gEspRange]];
+            [self sld:356 lo:10 hi:200 v:gEspRange act:@selector(f3:)];
           }
           - (void)tap { _panel.hidden = !_panel.hidden; }
           - (void)pan:(UIPanGestureRecognizer *)g {
@@ -623,58 +541,42 @@ jobs:
             gFovCircle.layer.cornerRadius = gAimFov;
             save();
           }
-          - (void)f2:(UISlider *)s { gCamFov = s.value; save(); }
-          - (void)f3:(UISlider *)s { gAimSpeed = s.value; save(); }
-          - (void)f4:(UISlider *)s { gEspRange = s.value; save(); }
+          - (void)f2:(UISlider *)s { gAimSpeed = s.value; save(); }
+          - (void)f3:(UISlider *)s { gEspRange = s.value; save(); }
           @end
 
-          // ---------- arranque ----------
           static void *boot(void *arg) {
-            for (int i = 0; i < 900; i++) {
-              if (resolveIl2Cpp()) break;
-              usleep(100000);
-            }
+            for (int i = 0; i < 900; i++) { if (resolveIl2Cpp()) break; usleep(100000); }
             if (!p_domain_get || !p_domain_get()) return NULL;
-
-            gCompCls  = clsNS("UnityEngine", "Component");
+            gCompCls = clsNS("UnityEngine", "Component");
             gTransCls = clsNS("UnityEngine", "Transform");
-            gCamCls   = clsNS("UnityEngine", "Camera");
-            gQuatCls  = clsNS("UnityEngine", "Quaternion");
-            gObjCls   = clsNS("UnityEngine", "Object");
-
+            gCamCls = clsNS("UnityEngine", "Camera");
+            gQuatCls = clsNS("UnityEngine", "Quaternion");
+            gObjCls = clsNS("UnityEngine", "Object");
             mCompTransform = meth(gCompCls, "get_transform", 0);
             mGetPos = meth(gTransCls, "get_position", 0);
             mGetRot = meth(gTransCls, "get_rotation", 0);
             mSetRot = meth(gTransCls, "set_rotation", 1);
-            mFind   = meth(gTransCls, "Find", 1);
-            mGetChild   = meth(gTransCls, "GetChild", 1);
+            mFind = meth(gTransCls, "Find", 1);
+            mGetChild = meth(gTransCls, "GetChild", 1);
             mChildCount = meth(gTransCls, "get_childCount", 0);
             mCamMain = meth(gCamCls, "get_main", 0);
-            mW2S     = meth(gCamCls, "WorldToScreenPoint", 1);
+            mW2S = meth(gCamCls, "WorldToScreenPoint", 1);
             mLookRot = meth(gQuatCls, "LookRotation", 2);
-            mSlerp   = meth(gQuatCls, "Slerp", 3);
-            gFindM   = meth(gObjCls, "FindObjectsOfType", 1);
-
-            for (int i = 0; i < (int)(sizeof(kPlayerCls)/sizeof(*kPlayerCls)) && !gPlayerCls; i++)
-              gPlayerCls = cls(kPlayerCls[i]);
+            mSlerp = meth(gQuatCls, "Slerp", 3);
+            gFindM = meth(gObjCls, "FindObjectsOfType", 1);
+            for (int i = 0; i < 7 && !gPlayerCls; i++) gPlayerCls = cls(kPlayerCls[i]);
             if (!gPlayerCls) return NULL;
-            for (int i = 0; i < (int)(sizeof(kNpcCls)/sizeof(*kNpcCls)) && !gNpcCls; i++)
-              gNpcCls = cls(kNpcCls[i]);
-
-            oTeam = off(gPlayerCls, "team");
-            if (!oTeam) oTeam = off(gPlayerCls, "Team");
-            if (!oTeam) oTeam = off(gPlayerCls, "teamId");
-            oHp = off(gPlayerCls, "hp");
-            if (!oHp) oHp = off(gPlayerCls, "health");
-            oDead = off(gPlayerCls, "isDead");
-            if (!oDead) oDead = off(gPlayerCls, "dead");
+            for (int i = 0; i < 5 && !gNpcCls; i++) gNpcCls = cls(kNpcCls[i]);
+            oTeam = off(gPlayerCls, "team"); if (!oTeam) oTeam = off(gPlayerCls, "teamId");
+            oHp = off(gPlayerCls, "hp"); if (!oHp) oHp = off(gPlayerCls, "health");
+            oDead = off(gPlayerCls, "isDead"); if (!oDead) oDead = off(gPlayerCls, "dead");
             oLocal1 = off(gPlayerCls, "isLocalPlayer");
             oLocal2 = off(gPlayerCls, "isMine");
-
-            for (int i = 0; i < (int)(sizeof(kMgrCls)/sizeof(*kMgrCls)) && !gLocalCls; i++) {
+            for (int i = 0; i < 3 && !gLocalCls; i++) {
               void *m = cls(kMgrCls[i]);
               if (!m) continue;
-              for (int j = 0; j < (int)(sizeof(kLocalSt)/sizeof(*kLocalSt)); j++) {
+              for (int j = 0; j < 4; j++) {
                 if (p_class_get_field_from_name(m, kLocalSt[j])) {
                   gLocalCls = m;
                   strlcpy(gLocalF, kLocalSt[j], sizeof(gLocalF));
@@ -682,14 +584,12 @@ jobs:
                 }
               }
             }
-
             gReady = YES;
             dispatch_async(dispatch_get_main_queue(), ^{
               UIWindowScene *sc = nil;
               for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
                 if ([s isKindOfClass:[UIWindowScene class]]) { sc = (UIWindowScene *)s; break; }
-              gWin = sc ? [[_BSWin alloc] initWithWindowScene:sc]
-                        : [[_BSWin alloc] initWithFrame:UIScreen.mainScreen.bounds];
+              gWin = sc ? [[_BSWin alloc] initWithWindowScene:sc] : [[_BSWin alloc] initWithFrame:UIScreen.mainScreen.bounds];
               gWin.windowLevel = UIWindowLevelAlert + 1;
               gWin.backgroundColor = [UIColor clearColor];
               _BSMenu *m = [_BSMenu new];
