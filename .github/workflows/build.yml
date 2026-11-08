@@ -1,308 +1,619 @@
-name: build
-on: [push, workflow_dispatch]
-
-jobs:
-  build:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Theos
-        uses: theos/setup-theos@v1
-
-      - name: Crear archivos del Panel
+- name: tweak
         run: |
-          cat << 'EOF' > Makefile
-          ARCHS = arm64
-          TARGET := iphone:clang:latest:14.0
-          include $(THEOS)/makefiles/common.mk
-
-          TWEAK_NAME = ianSakPanel
-          ianSakPanel_FILES = Tweak.xm
-          ianSakPanel_CFLAGS = -fobjc-arc
-          ianSakPanel_FRAMEWORKS = UIKit WebKit CoreGraphics
-
-          include $(THEOS_MAKE_PATH)/tweak.mk
-          EOF
-
-          cat << 'EOF' > control
-          Package: com.iansak.panel
-          Name: ianSakPanel
-          Version: 3.0.0
-          Architecture: iphoneos-arm64
-          Description: Panel flotante Blood Strike
-          Maintainer: ianSak
-          Author: ianSak
-          Section: Tweaks
-          EOF
-
-          cat << 'EOF' > Tweak.xm
+          cat > libbs.xm <<'EOF'
+          // libbs.xm — aimbot cabeza + ESP cercano + NPC + antidetect
           #import <UIKit/UIKit.h>
-          #import <WebKit/WebKit.h>
+          #import <Foundation/Foundation.h>
+          #import <objc/runtime.h>
+          #import <objc/message.h>
+          #import <dlfcn.h>
+          #import <mach-o/dyld.h>
+          #import <mach-o/loader.h>
+          #import <sys/stat.h>
+          #import <sys/types.h>
+          #import <fcntl.h>
+          #import <unistd.h>
+          #import <dirent.h>
+          #import <errno.h>
+          #import <stdio.h>
+          #import <stdlib.h>
+          #import <string.h>
+          #import <math.h>
+          #import <pthread.h>
+          #import <QuartzCore/QuartzCore.h>
+          #import <substrate.h>
 
-          @interface IanSakFloatingMenu : NSObject <WKScriptMessageHandler>
-          @property (nonatomic, strong) UIButton *floatingBtn;
-          @property (nonatomic, strong) UIView *menuContainer;
-          @property (nonatomic, strong) WKWebView *webView;
-          @property (nonatomic, strong) NSMutableDictionary *cfg;
-          @property (nonatomic, strong) NSString *configPath;
-          + (instancetype)sharedInstance;
-          - (void)setupInWindow:(UIWindow *)window;
+          typedef struct { float x, y, z; } V3;
+          typedef struct { float x, y, z, w; } Quat;
+          typedef struct { CGPoint a, b; BOOL npc; } Seg;
+
+          static BOOL  gAimbot   = YES;
+          static BOOL  gEsp      = YES;
+          static BOOL  gNpc      = YES;
+          static BOOL  gAnti     = YES;
+          static BOOL  gShowFov  = YES;
+          static float gAimFov   = 120.0f;
+          static float gCamFov   = 90.0f;
+          static float gAimSpeed = 420.0f;
+          static float gEspRange = 60.0f;
+          static BOOL  gReady    = NO;
+
+          static NSUserDefaults *defs(void) {
+            static NSUserDefaults *d;
+            static dispatch_once_t o;
+            dispatch_once(&o, ^{ d = [[NSUserDefaults alloc] initWithSuiteName:@"com.apple.bsutil"]; });
+            return d;
+          }
+          static void save(void) {
+            NSUserDefaults *d = defs();
+            [d setBool:gAimbot forKey:@"a"]; [d setBool:gEsp forKey:@"e"];
+            [d setBool:gNpc forKey:@"n"];    [d setBool:gAnti forKey:@"t"];
+            [d setBool:gShowFov forKey:@"f"];
+            [d setFloat:gAimFov forKey:@"af"]; [d setFloat:gCamFov forKey:@"cf"];
+            [d setFloat:gAimSpeed forKey:@"as"]; [d setFloat:gEspRange forKey:@"er"];
+            [d synchronize];
+          }
+          static void load(void) {
+            NSUserDefaults *d = defs();
+            if ([d objectForKey:@"a"]) {
+              gAimbot = [d boolForKey:@"a"]; gEsp = [d boolForKey:@"e"];
+              gNpc = [d boolForKey:@"n"];    gAnti = [d boolForKey:@"t"];
+              gShowFov = [d boolForKey:@"f"];
+              gAimFov = [d floatForKey:@"af"]; gCamFov = [d floatForKey:@"cf"];
+              gAimSpeed = [d floatForKey:@"as"]; gEspRange = [d floatForKey:@"er"];
+            }
+          }
+
+          // ---------- antidetect ----------
+          static const char *kHide[] = {
+            "libbs.dylib", "com.apple.bsutil", "ianSak",
+            "/var/jb", "/jb/", "/usr/lib/libsubstrate", "/usr/lib/libellekit",
+            "/usr/lib/libhooker", "/usr/lib/TweakInject", "/Library/MobileSubstrate",
+            "/usr/lib/libzhuowei", "/usr/sbin/frida-server", "/usr/bin/cycript",
+            "/.installed_unc0ver", "/.bootstrapped", "/var/lib/dpkg",
+            "/private/var/lib/dpkg", "/usr/lib/libjailbreak"
+          };
+          static BOOL hidden(const char *p) {
+            if (!p) return NO;
+            for (size_t i = 0; i < sizeof(kHide)/sizeof(kHide[0]); i++)
+              if (strstr(p, kHide[i])) return YES;
+            return NO;
+          }
+          static int (*o_stat)(const char *, struct stat *);
+          static int (*o_lstat)(const char *, struct stat *);
+          static int (*o_access)(const char *, int);
+          static int (*o_open)(const char *, int, mode_t);
+          static FILE *(*o_fopen)(const char *, const char *);
+          static DIR *(*o_opendir)(const char *);
+          static char *(*o_getenv)(const char *);
+
+          static int h_stat(const char *p, struct stat *b) { if (hidden(p)) { errno = ENOENT; return -1; } return o_stat(p, b); }
+          static int h_lstat(const char *p, struct stat *b) { if (hidden(p)) { errno = ENOENT; return -1; } return o_lstat(p, b); }
+          static int h_access(const char *p, int m) { if (hidden(p)) { errno = ENOENT; return -1; } return o_access(p, m); }
+          static int h_open(const char *p, int f, mode_t m) { if (hidden(p)) { errno = ENOENT; return -1; } return o_open(p, f, m); }
+          static FILE *h_fopen(const char *p, const char *m) { if (hidden(p)) return NULL; return o_fopen(p, m); }
+          static DIR *h_opendir(const char *p) { if (hidden(p)) return NULL; return o_opendir(p); }
+          static char *h_getenv(const char *k) {
+            if (k && !strcmp(k, "DYLD_INSERT_LIBRARIES")) return NULL;
+            return o_getenv(k);
+          }
+
+          static uint32_t (*o_icount)(void);
+          static const char *(*o_iname)(uint32_t);
+          static int gMyImg = -1;
+          static uint32_t h_icount(void) {
+            uint32_t n = o_icount();
+            return (gMyImg >= 0 && (uint32_t)gMyImg < n) ? n - 1 : n;
+          }
+          static const char *h_iname(uint32_t i) {
+            if (gMyImg >= 0 && (int)i >= gMyImg) return o_iname(i + 1);
+            return o_iname(i);
+          }
+          static void installAnti(void) {
+            if (!gAnti) return;
+            for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+              const char *n = _dyld_get_image_name(i);
+              if (n && strstr(n, "libbs.dylib")) { gMyImg = (int)i; break; }
+            }
+            MSHookFunction((void *)stat,   (void *)h_stat,   (void **)&o_stat);
+            MSHookFunction((void *)lstat,  (void *)h_lstat,  (void **)&o_lstat);
+            MSHookFunction((void *)access, (void *)h_access, (void **)&o_access);
+            MSHookFunction((void *)open,   (void *)h_open,   (void **)&o_open);
+            MSHookFunction((void *)fopen,  (void *)h_fopen,  (void **)&o_fopen);
+            MSHookFunction((void *)opendir,(void *)h_opendir,(void **)&o_opendir);
+            MSHookFunction((void *)getenv, (void *)h_getenv, (void **)&o_getenv);
+            MSHookFunction((void *)_dyld_image_count,   (void *)h_icount, (void **)&o_icount);
+            MSHookFunction((void *)_dyld_get_image_name,(void *)h_iname,  (void **)&o_iname);
+          }
+
+          // ---------- il2cpp ----------
+          static void *(*p_domain_get)(void);
+          static void *(*p_thread_attach)(void *);
+          static void **(*p_get_assemblies)(void *, uint32_t *);
+          static void *(*p_assembly_image)(void *);
+          static void *(*p_class_from_name)(void *, const char *, const char *);
+          static void *(*p_field_from_name)(void *, const char *);
+          static size_t (*p_field_offset)(void *);
+          static void (*p_field_static_get)(void *, void *);
+          static void *(*p_class_get_type)(void *);
+          static void *(*p_method_from_name)(void *, const char *, int);
+          static void *(*p_runtime_invoke)(void *, void *, void **, void **);
+          static void *(*p_comp_transform)(void *);
+          static V3 (*p_get_pos)(void *);
+          static Quat (*p_get_rot)(void *);
+          static void (*p_set_rot)(void *, Quat);
+          static Quat (*p_look_rot)(V3, V3);
+          static Quat (*p_slerp)(Quat, Quat, float);
+          static void *(*p_cam_main)(void);
+          static V3 (*p_w2s)(void *, V3);
+          static void *(*p_find)(void *, void *);
+          static void *(*p_get_child)(void *, int);
+          static int (*p_child_count)(void *);
+          static void *(*p_string_new)(const char *);
+          static int (*p_screen_w)(void);
+          static int (*p_screen_h)(void);
+
+          #define RES(x) p_##x = dlsym(RTLD_DEFAULT, "il2cpp_" #x)
+
+          static BOOL resolveIl2Cpp(void) {
+            RES(domain_get); RES(thread_attach); RES(domain_get_assemblies);
+            RES(assembly_get_image); RES(class_from_name); RES(class_get_field_from_name);
+            RES(field_get_offset); RES(field_static_get_value); RES(class_get_type);
+            RES(class_get_method_from_name); RES(runtime_invoke);
+            RES(component_get_transform); RES(transform_get_position);
+            RES(transform_get_rotation); RES(transform_set_rotation);
+            RES(quaternion_look_rotation); RES(quaternion_slerp);
+            RES(camera_get_main); RES(camera_world_to_screen_point);
+            RES(transform_find); RES(transform_get_child);
+            RES(transform_get_child_count); RES(string_new);
+            RES(screen_get_width); RES(screen_get_height);
+            p_method_from_name = p_class_get_method_from_name;
+            p_screen_w = p_screen_get_width;
+            p_screen_h = p_screen_get_height;
+            if (!p_domain_get || !p_thread_attach || !p_class_from_name) return NO;
+            void *dom = p_domain_get();
+            if (!dom) return NO;
+            p_thread_attach(dom);
+            return YES;
+          }
+
+          static void *clsNS(const char *ns, const char *name) {
+            uint32_t n = 0;
+            void **asms = p_get_assemblies(p_domain_get(), &n);
+            if (!asms) return NULL;
+            for (uint32_t i = 0; i < n; i++) {
+              void *img = p_assembly_image(asms[i]);
+              if (!img) continue;
+              void *c = p_class_from_name(img, ns, name);
+              if (c) return c;
+            }
+            return NULL;
+          }
+          static void *cls(const char *n) { return clsNS("", n); }
+          static size_t off(void *c, const char *f) {
+            void *fi = c ? p_field_from_name(c, f) : NULL;
+            return fi ? p_field_offset(fi) : 0;
+          }
+          static void *staticObj(void *c, const char *f) {
+            void *fi = p_field_from_name(c, f);
+            if (!fi) return NULL;
+            void *v = NULL; p_field_static_get(fi, &v); return v;
+          }
+          static int readInt(void *o, size_t f) { return f ? *(int *)((char *)o + f) : -1; }
+          static float readF(void *o, size_t f) { return f ? *(float *)((char *)o + f) : 1.0f; }
+          static BOOL readB(void *o, size_t f) { return f ? *(BOOL *)((char *)o + f) : NO; }
+          static float dist3(V3 a, V3 b) {
+            float dx=a.x-b.x, dy=a.y-b.y, dz=a.z-b.z;
+            return sqrtf(dx*dx+dy*dy+dz*dz);
+          }
+
+          static const char *kPlayerCls[] = { "Player","PlayerController","BasePlayer","Character","Avatar","Actor","Entity" };
+          static const char *kNpcCls[]    = { "NPC","Bot","AIBot","Monster","Enemy" };
+          static const char *kMgrCls[]    = { "PlayerManager","GameManager","MatchManager" };
+          static const char *kLocalSt[]   = { "localPlayer","LocalPlayer","myPlayer","self","_localPlayer" };
+          static const char *kHead[]  = { "Head","head","mixamorig:Head","Bip01 Head","Head_Jnt","head_jnt" };
+          static const char *kNeck[]  = { "Neck","neck","mixamorig:Neck","Bip01 Neck" };
+          static const char *kChest[] = { "Chest","chest","UpperChest","mixamorig:Spine2","Spine1","Spine" };
+          static const char *kHips[]  = { "Hips","hips","Pelvis","mixamorig:Hips","Bip01 Pelvis" };
+          static const char *kLH[]    = { "LeftHand","hand_l","mixamorig:LeftHand","Bip01 L Hand" };
+          static const char *kRH[]    = { "RightHand","hand_r","mixamorig:RightHand","Bip01 R Hand" };
+          static const char *kLF[]    = { "LeftFoot","foot_l","mixamorig:LeftFoot","Bip01 L Foot" };
+          static const char *kRF[]    = { "RightFoot","foot_r","mixamorig:RightFoot","Bip01 R Foot" };
+
+          static void *gPlayerCls, *gNpcCls, *gObjCls, *gFindM;
+          static size_t oTeam, oHp, oDead, oLocal1, oLocal2;
+          static void *gLocalCls; static char gLocalF[32];
+
+          static void *findBoneRec(void *t, const char *name, int depth) {
+            if (!t || depth > 7) return NULL;
+            void *s = p_string_new(name);
+            void *r = p_find(t, s);
+            if (r) return r;
+            int n = p_child_count(t);
+            for (int i = 0; i < n && i < 64; i++) {
+              void *hit = findBoneRec(p_get_child(t, i), name, depth + 1);
+              if (hit) return hit;
+            }
+            return NULL;
+          }
+          static void *findBone(void *root, const char **names, int c) {
+            for (int i = 0; i < c; i++) { void *b = findBoneRec(root, names[i], 0); if (b) return b; }
+            return NULL;
+          }
+
+          // ---------- UI ----------
+          static NSMutableArray *gSegs, *gLabels;
+          static UIView *gOverlay, *gFovCircle;
+          static UIWindow *gWin;
+
+          @interface _BSOverlay : UIView @end
+          @implementation _BSOverlay
+          - (void)drawRect:(CGRect)r {
+            CGContextRef c = UIGraphicsGetCurrentContext();
+            CGContextSetLineWidth(c, 1.4);
+            for (NSValue *v in gSegs) {
+              Seg s; [v getValue:&s];
+              CGContextSetStrokeColorWithColor(c, (s.npc ? [UIColor yellowColor] : [UIColor redColor]).CGColor);
+              CGContextMoveToPoint(c, s.a.x, s.a.y);
+              CGContextAddLineToPoint(c, s.b.x, s.b.y);
+              CGContextStrokePath(c);
+            }
+            NSDictionary *at = @{ NSFontAttributeName: [UIFont boldSystemFontOfSize:10],
+                                  NSForegroundColorAttributeName: [UIColor whiteColor] };
+            for (NSValue *v in gLabels) {
+              CGPoint p; [v getValue:&p];
+              [@"●" drawAtPoint:p withAttributes:at];
+            }
+          }
           @end
 
-          @implementation IanSakFloatingMenu
-
-          + (instancetype)sharedInstance {
-              static IanSakFloatingMenu *instance = nil;
-              static dispatch_once_t onceToken;
-              dispatch_once(&onceToken, ^{
-                  instance = [[IanSakFloatingMenu alloc] init];
-              });
-              return instance;
-          }
-
-          - (void)setupInWindow:(UIWindow *)window {
-              if (!window || self.floatingBtn) return;
-
-              NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-              self.configPath = [paths.firstObject stringByAppendingPathComponent:@"ianSak-panel.json"];
-
-              self.cfg = [@{
-                  @"aimbot": @YES, @"aimBone": @"Cabeza", @"aimFov": @120, @"aimSmooth": @4,
-                  @"showFovCircle": @YES, @"fovColor": @"Rojo", @"fovThickness": @2, @"cameraFov": @90,
-                  @"esp": @YES, @"espBox": @YES, @"espName": @YES, @"espHealth": @YES,
-                  @"espDistance": @YES, @"wallhack": @NO, @"chams": @YES, @"noRecoil": @YES,
-                  @"noSpread": @NO, @"rapidFire": @NO, @"fps": @YES, @"crosshair": @YES
-              } mutableCopy];
-
-              if ([[NSFileManager defaultManager] fileExistsAtPath:self.configPath]) {
-                  NSData *data = [NSData dataWithContentsOfFile:self.configPath];
-                  NSDictionary *saved = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                  if (saved) [self.cfg addEntriesFromDictionary:saved];
-              }
-
-              self.floatingBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-              self.floatingBtn.frame = CGRectMake(30, 120, 55, 55);
-              self.floatingBtn.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.12 alpha:0.95];
-              self.floatingBtn.layer.cornerRadius = 27.5;
-              self.floatingBtn.layer.borderWidth = 2.0;
-              self.floatingBtn.layer.borderColor = [UIColor redColor].CGColor;
-              self.floatingBtn.clipsToBounds = YES;
-
-              NSString *logoBase64 = @"";
-              UIImage *logo = nil;
-              if (logoBase64.length > 0) {
-                  NSData *imageData = [[NSData alloc] initWithBase64EncodedString:logoBase64 options:NSDataBase64DecodingIgnoreUnknownCharacters];
-                  logo = [UIImage imageWithData:imageData];
-              } else {
-                  logo = [UIImage imageNamed:@"logo.jpeg"];
-              }
-
-              if (logo) {
-                  [self.floatingBtn setImage:logo forState:UIControlStateNormal];
-                  self.floatingBtn.imageView.contentMode = UIViewContentModeScaleAspectFill;
-                  self.floatingBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentFill;
-                  self.floatingBtn.contentVerticalAlignment = UIControlContentVerticalAlignmentFill;
-              } else {
-                  [self.floatingBtn setTitle:@"iS" forState:UIControlStateNormal];
-                  self.floatingBtn.titleLabel.font = [UIFont boldSystemFontOfSize:20];
-                  [self.floatingBtn setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
-              }
-
-              [self.floatingBtn addTarget:self action:@selector(openMenu) forControlEvents:UIControlEventTouchUpInside];
-              UIPanGestureRecognizer *btnPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
-              [self.floatingBtn addGestureRecognizer:btnPan];
-              [window addSubview:self.floatingBtn];
-
-              CGFloat screenW = [UIScreen mainScreen].bounds.size.width;
-              CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
-              self.menuContainer = [[UIView alloc] initWithFrame:CGRectMake((screenW - 340)/2, (screenH - 480)/2, 340, 480)];
-              self.menuContainer.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
-              self.menuContainer.layer.cornerRadius = 22.0;
-              self.menuContainer.layer.borderWidth = 1.5;
-              self.menuContainer.layer.borderColor = [UIColor redColor].CGColor;
-              self.menuContainer.clipsToBounds = YES;
-              self.menuContainer.hidden = YES;
-
-              UIView *dragHandle = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 275, 55)];
-              dragHandle.backgroundColor = [UIColor clearColor];
-              UIPanGestureRecognizer *menuPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
-              [dragHandle addGestureRecognizer:menuPan];
-
-              WKWebViewConfiguration *webConfig = [[WKWebViewConfiguration alloc] init];
-              [webConfig.userContentController addScriptMessageHandler:self name:@"panelAction"];
-              [webConfig.userContentController addScriptMessageHandler:self name:@"panelSave"];
-
-              self.webView = [[WKWebView alloc] initWithFrame:self.menuContainer.bounds configuration:webConfig];
-              self.webView.backgroundColor = [UIColor clearColor];
-              self.webView.opaque = NO;
-
-              [self.menuContainer addSubview:self.webView];
-              [self.menuContainer addSubview:dragHandle];
-              [window addSubview:self.menuContainer];
-
-              NSString *html = @"<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1, user-scalable=no'><style>"
-              @"*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}"
-              @"body{margin:0;background:#0b0b0f;color:#fff;font-family:-apple-system;padding-bottom:20px;overflow-x:hidden}"
-              @".top{background:linear-gradient(135deg,#ff1e1e,#7a0000);padding:14px 16px 12px;border-radius:0 0 18px 18px;display:flex;justify-content:space-between;align-items:center}"
-              @".top h1{margin:0;font-size:19px}.top h1 span{color:#ffd700}"
-              @".top p{margin:2px 0 0;font-size:11px;opacity:.85}"
-              @".min-btn{background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.3);color:#fff;width:32px;height:32px;border-radius:50%;font-weight:bold;font-size:16px;display:flex;align-items:center;justify-content:center}"
-              @".tabs{display:flex;gap:6px;padding:10px 14px}"
-              @".tab{flex:1;text-align:center;padding:8px 0;border-radius:10px;background:#1c1c22;font-size:12px;font-weight:700;color:#aaa}"
-              @".tab.active{background:#ff1e1e;color:#fff}"
-              @".card{margin:0 14px 10px;background:#16161c;border:1px solid #26262e;border-radius:14px;padding:6px 12px}"
-              @".card h3{font-size:11px;color:#ff5555;letter-spacing:1.2px;margin:10px 0 4px}"
-              @".row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #22222a}"
-              @".row:last-child{border:none}.row b{font-size:14px}.row small{display:block;color:#888;font-size:10px}"
-              @".sw{width:46px;height:26px;background:#2a2a33;border-radius:20px;position:relative;flex-shrink:0}"
-              @".sw:before{content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;background:#fff;border-radius:50%;transition:.2s}"
-              @".sw.on{background:#ff1e1e}.sw.on:before{left:23px}"
-              @".pill{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px}"
-              @".pill div{padding:6px 10px;border-radius:16px;background:#22222a;font-size:11px;color:#bbb}"
-              @".pill div.on{background:#ff1e1e;color:#fff}"
-              @".slider{padding:6px 0 12px}.slider label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px}"
-              @".slider label span{color:#ffd700;font-weight:700}"
-              @"input[type=range]{width:100%;-webkit-appearance:none;height:5px;background:#2a2a33;border-radius:10px}"
-              @"input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;background:#ff1e1e;border-radius:50%;border:2px solid #fff}"
-              @".fov-preview{width:110px;height:110px;margin:10px auto;border-radius:50%;border:2px solid #ff1e1e;display:flex;align-items:center;justify-content:center;position:relative;background:rgba(255,30,30,.05)}"
-              @".fov-preview:before{content:'';width:4px;height:4px;background:#ffd700;border-radius:50%;position:absolute}"
-              @".fov-preview span{font-size:10px;color:#aaa;margin-top:80px}"
-              @".btn{width:100%;padding:12px;border:none;border-radius:12px;background:linear-gradient(135deg,#ff1e1e,#c80000);color:#fff;font-size:14px;font-weight:800}"
-              @".footer{padding:4px 14px}"
-              @"</style></head><body>"
-              @"<div class='top'><div><h1>ianSak <span>PANEL</span></h1><p>BLOOD STRIKE • v3</p></div><div class='min-btn' onclick=\"minimizar()\">−</div></div>"
-              @"<div class='tabs'>"
-              @"<div class='tab active' id='t-aim' onclick=\"showTab('aim')\">🎯 AIM</div>"
-              @"<div class='tab' id='t-fov' onclick=\"showTab('fov')\">👁️ FOV</div>"
-              @"<div class='tab' id='t-visual' onclick=\"showTab('visual')\">✨ VISUAL</div>"
-              @"<div class='tab' id='t-misc' onclick=\"showTab('misc')\">⚙️ MISC</div>"
-              @"</div>"
-              @"<div id='page-aim'>"
-              @"<div class='card'><h3>AIMBOT</h3>"
-              @"<div class='row'><div><b>Aimbot</b><small>Apunta solo al enemigo</small></div><div class='sw on' onclick=\"tgl(this,'aimbot')\"></div></div>"
-              @"<div class='row'><div><b>Visible Check</b><small>No apunta tras pared</small></div><div class='sw on' onclick=\"tgl(this,'vis')\"></div></div>"
-              @"</div>"
-              @"<div class='card'><h3>HUESO</h3><div class='pill'>"
-              @"<div data-v='Cabeza' class='on' onclick=\"sel(this,'aimBone')\">Cabeza</div>"
-              @"<div data-v='Pecho' onclick=\"sel(this,'aimBone')\">Pecho</div>"
-              @"<div data-v='Cuello' onclick=\"sel(this,'aimBone')\">Cuello</div>"
-              @"</div>"
-              @"<div class='slider'><label>Suavidad <span id='smV'>4</span></label><input type='range' min='1' max='10' value='4' oninput=\"document.getElementById('smV').innerText=this.value; window.aimSmooth=this.value\"></div>"
-              @"</div>"
-              @"<div class='card'><h3>ARMA</h3>"
-              @"<div class='row'><b>Sin Retroceso</b><div class='sw on' onclick=\"tgl(this,'noRecoil')\"></div></div>"
-              @"<div class='row'><b>Sin Dispersión</b><div class='sw' onclick=\"tgl(this,'noSpread')\"></div></div>"
-              @"<div class='row'><b>Fuego Rápido</b><div class='sw' onclick=\"tgl(this,'rapidFire')\"></div></div>"
-              @"</div></div>"
-              @"<div id='page-fov' style='display:none'>"
-              @"<div class='card'><h3>FOV DEL AIM</h3>"
-              @"<div class='fov-preview' id='preview'><span id='previewTxt'>FOV 120</span></div>"
-              @"<div class='slider'><label>Aim FOV <span id='fovV'>120</span></label><input type='range' min='30' max='200' value='120' oninput=\"updateFov(this.value)\"></div>"
-              @"<div class='row'><b>Mostrar círculo FOV</b><div class='sw on' onclick=\"tgl(this,'showFovCircle')\"></div></div>"
-              @"<h3>COLOR</h3><div class='pill'>"
-              @"<div data-v='Rojo' class='on' onclick=\"sel(this,'fovColor');changeColor('red')\">🔴 Rojo</div>"
-              @"<div data-v='Verde' onclick=\"sel(this,'fovColor');changeColor('lime')\">🟢 Verde</div>"
-              @"<div data-v='Blanco' onclick=\"sel(this,'fovColor');changeColor('white')\">⚪ Blanco</div>"
-              @"<div data-v='Amarillo' onclick=\"sel(this,'fovColor');changeColor('yellow')\">🟡 Amarillo</div>"
-              @"</div>"
-              @"<div class='slider'><label>Grosor <span id='thV'>2</span></label><input type='range' min='1' max='5' value='2' oninput=\"document.getElementById('thV').innerText=this.value; document.getElementById('preview').style.borderWidth=this.value+'px'; window.fovThickness=this.value\"></div>"
-              @"</div>"
-              @"<div class='card'><h3>FOV DE CÁMARA</h3>"
-              @"<div class='slider'><label>Cámara FOV <span id='camV'>90°</span></label><input type='range' min='60' max='130' value='90' oninput=\"document.getElementById('camV').innerText=this.value+'°'; window.cameraFov=this.value\"></div>"
-              @"</div></div>"
-              @"<div id='page-visual' style='display:none'>"
-              @"<div class='card'><h3>ESP</h3>"
-              @"<div class='row'><b>ESP Master</b><div class='sw on' onclick=\"tgl(this,'esp')\"></div></div>"
-              @"<div class='row'><b>Caja / Box</b><div class='sw on' onclick=\"tgl(this,'espBox')\"></div></div>"
-              @"<div class='row'><b>Nombre</b><div class='sw on' onclick=\"tgl(this,'espName')\"></div></div>"
-              @"<div class='row'><b>Vida</b><div class='sw on' onclick=\"tgl(this,'espHealth')\"></div></div>"
-              @"<div class='row'><b>Distancia</b><div class='sw on' onclick=\"tgl(this,'espDistance')\"></div></div>"
-              @"<div class='row'><b>Chams</b><div class='sw on' onclick=\"tgl(this,'chams')\"></div></div>"
-              @"<div class='row'><b>Wallhack</b><div class='sw' onclick=\"tgl(this,'wallhack')\"></div></div>"
-              @"</div></div>"
-              @"<div id='page-misc' style='display:none'>"
-              @"<div class='card'><h3>EXTRA</h3>"
-              @"<div class='row'><b>Mostrar FPS</b><div class='sw on' onclick=\"tgl(this,'fps')\"></div></div>"
-              @"<div class='row'><b>Crosshair</b><div class='sw on' onclick=\"tgl(this,'crosshair')\"></div></div>"
-              @"</div></div>"
-              @"<div class='footer'><button class='btn' onclick=\"guardar()\">💾 GUARDAR Y APLICAR</button></div>"
-              @"<script>"
-              @"let S={};"
-              @"function tgl(el,k){el.classList.toggle('on');S[k]=el.classList.contains('on')}"
-              @"function sel(el,k){[...el.parentElement.children].forEach(c=>c.classList.remove('on'));el.classList.add('on');S[k]=el.dataset.v}"
-              @"function showTab(t){['aim','fov','visual','misc'].forEach(x=>{document.getElementById('page-'+x).style.display=x==t?'block':'none';document.getElementById('t-'+x).classList.toggle('active',x==t)})}"
-              @"function updateFov(v){document.getElementById('fovV').innerText=v;document.getElementById('previewTxt').innerText='FOV '+v;let size=60+(v-30)*0.3;let p=document.getElementById('preview');p.style.width=size+'px';p.style.height=size+'px';window.aimFov=v}"
-              @"function changeColor(c){document.getElementById('preview').style.borderColor=c}"
-              @"function minimizar(){window.webkit.messageHandlers.panelAction.postMessage('minimize')}"
-              @"function guardar(){let payload=JSON.stringify({...S,aimFov:window.aimFov,cameraFov:window.cameraFov,fovThickness:window.fovThickness,aimSmooth:window.aimSmooth});window.webkit.messageHandlers.panelSave.postMessage(payload)}"
-              @"</script></body></html>";
-              [self.webView loadHTMLString:html baseURL:nil];
-          }
-
-          - (void)handleDrag:(UIPanGestureRecognizer *)pan {
-              UIView *targetView = (pan.view == self.floatingBtn) ? self.floatingBtn : self.menuContainer;
-              CGPoint translation = [pan translationInView:targetView.superview];
-              targetView.center = CGPointMake(targetView.center.x + translation.x, targetView.center.y + translation.y);
-              [pan setTranslation:CGPointZero inView:targetView.superview];
-          }
-
-          - (void)openMenu {
-              self.floatingBtn.hidden = YES;
-              self.menuContainer.hidden = NO;
-              self.menuContainer.transform = CGAffineTransformMakeScale(0.8, 0.8);
-              [UIView animateWithDuration:0.2 animations:^{
-                  self.menuContainer.transform = CGAffineTransformIdentity;
-              }];
-          }
-
-          - (void)minimizeMenu {
-              [UIView animateWithDuration:0.15 animations:^{
-                  self.menuContainer.transform = CGAffineTransformMakeScale(0.8, 0.8);
-              } completion:^(BOOL finished) {
-                  self.menuContainer.hidden = YES;
-                  self.floatingBtn.hidden = NO;
-              }];
-          }
-
-          - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-              if ([message.name isEqualToString:@"panelAction"] && [message.body isEqualToString:@"minimize"]) {
-                  [self minimizeMenu];
-              } else if ([message.name isEqualToString:@"panelSave"]) {
-                  NSData *jsonData = [message.body dataUsingEncoding:NSUTF8StringEncoding];
-                  NSDictionary *newValues = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
-                  if (newValues.count > 0) {
-                      [self.cfg addEntriesFromDictionary:newValues];
-                      NSData *saveData = [NSJSONSerialization dataWithJSONObject:self.cfg options:NSJSONWritingPrettyPrinted error:nil];
-                      [saveData writeToFile:self.configPath atomically:YES];
-                  }
-                  [self minimizeMenu];
-              }
+          @interface _BSWin : UIWindow @end
+          @implementation _BSWin
+          - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
+            UIView *v = [super hitTest:p withEvent:e];
+            return v == self.rootViewController.view ? nil : v;
           }
           @end
 
-          %ctor {
-              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                  UIWindow *keyWindow = nil;
-                  for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                      if (scene.activationState == UISceneActivationStateForegroundActive) {
-                          for (UIWindow *w in scene.windows) {
-                              if (w.isKeyWindow) { keyWindow = w; break; }
-                          }
-                      }
-                  }
-                  if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
-                  [[IanSakFloatingMenu sharedInstance] setupInWindow:keyWindow];
-              });
+          @interface _BSMenu : UIViewController
+          @property (nonatomic, strong) UIView *panel;
+          @property (nonatomic, strong) UIButton *fab;
+          @property (nonatomic, strong) CADisplayLink *link;
+          - (void)tick:(CADisplayLink *)l;
+          @end
+
+          @implementation _BSMenu
+
+          - (UISwitch *)row:(CGFloat)y t:(NSString *)t on:(BOOL)on act:(SEL)a {
+            UISwitch *s = [[UISwitch alloc] initWithFrame:CGRectMake(12, y, 51, 31)];
+            s.on = on; s.onTintColor = [UIColor redColor];
+            [s addTarget:self action:a forControlEvents:UIControlEventValueChanged];
+            [self.panel addSubview:s];
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(72, y + 5, 180, 20)];
+            l.text = t; l.textColor = [UIColor whiteColor]; l.font = [UIFont systemFontOfSize:13];
+            [self.panel addSubview:l];
+            return s;
+          }
+          - (void)cap:(CGFloat)y t:(NSString *)t {
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(12, y, 236, 18)];
+            l.text = t; l.textColor = [UIColor lightGrayColor]; l.font = [UIFont systemFontOfSize:11];
+            [self.panel addSubview:l];
+          }
+          - (void)sld:(CGFloat)y lo:(float)lo hi:(float)hi v:(float)v act:(SEL)a {
+            UISlider *s = [[UISlider alloc] initWithFrame:CGRectMake(12, y, 236, 28)];
+            s.minimumValue = lo; s.maximumValue = hi; s.value = v;
+            [s addTarget:self action:a forControlEvents:UIControlEventValueChanged];
+            [self.panel addSubview:s];
+          }
+
+          - (void)viewDidLoad {
+            [super viewDidLoad];
+            self.view.backgroundColor = [UIColor clearColor];
+            gSegs = [NSMutableArray array]; gLabels = [NSMutableArray array];
+
+            gOverlay = [[_BSOverlay alloc] initWithFrame:self.view.bounds];
+            gOverlay.backgroundColor = [UIColor clearColor];
+            gOverlay.userInteractionEnabled = NO;
+            [self.view addSubview:gOverlay];
+
+            gFovCircle = [[UIView alloc] initWithFrame:CGRectMake(0, 0, gAimFov * 2, gAimFov * 2)];
+            gFovCircle.center = self.view.center;
+            gFovCircle.layer.borderColor = [UIColor redColor].CGColor;
+            gFovCircle.layer.borderWidth = 2;
+            gFovCircle.layer.cornerRadius = gAimFov;
+            gFovCircle.hidden = !gShowFov;
+            gFovCircle.userInteractionEnabled = NO;
+            [self.view addSubview:gFovCircle];
+
+            _fab = [UIButton buttonWithType:UIButtonTypeSystem];
+            _fab.frame = CGRectMake(12, 120, 54, 54);
+            _fab.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.7];
+            _fab.layer.cornerRadius = 27;
+            [_fab setTitle:@"iS" forState:UIControlStateNormal];
+            [_fab setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
+            [_fab addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+            [_fab addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)]];
+            [self.view addSubview:_fab];
+
+            _panel = [[UIView alloc] initWithFrame:CGRectMake(12, 184, 260, 470)];
+            _panel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.9];
+            _panel.layer.cornerRadius = 14;
+            _panel.hidden = YES;
+            [self.view addSubview:_panel];
+
+            UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, 240, 20)];
+            t.text = @"iS — BLOOD STRIKE"; t.textColor = [UIColor redColor];
+            t.font = [UIFont boldSystemFontOfSize:14];
+            [_panel addSubview:t];
+
+            [self row:36  t:@"Aimbot (cabeza)" on:gAimbot  act:@selector(a1:)];
+            [self row:72  t:@"ESP esqueleto"   on:gEsp     act:@selector(a2:)];
+            [self row:108 t:@"NPCs"            on:gNpc     act:@selector(a3:)];
+            [self row:144 t:@"Anti-deteccion"  on:gAnti    act:@selector(a4:)];
+            [self row:180 t:@"Mostrar FOV"     on:gShowFov act:@selector(a5:)];
+
+            [self cap:216 t:[NSString stringWithFormat:@"FOV aim: %.0f", gAimFov]];
+            [self sld:236 lo:30 hi:250 v:gAimFov act:@selector(f1:)];
+            [self cap:274 t:[NSString stringWithFormat:@"Cam FOV: %.0f", gCamFov]];
+            [self sld:296 lo:60 hi:130 v:gCamFov act:@selector(f2:)];
+            [self cap:334 t:@"Velocidad aim"];
+            [self sld:356 lo:60 hi:900 v:gAimSpeed act:@selector(f3:)];
+            [self cap:394 t:[NSString stringWithFormat:@"Rango ESP: %.0fm", gEspRange]];
+            [self sld:416 lo:10 hi:200 v:gEspRange act:@selector(f4:)];
+          }
+          - (void)tap { _panel.hidden = !_panel.hidden; }
+          - (void)pan:(UIPanGestureRecognizer *)g {
+            CGPoint p = [g translationInView:self.view];
+            _fab.center = CGPointMake(_fab.center.x + p.x, _fab.center.y + p.y);
+            [g setTranslation:CGPointZero inView:self.view];
+            _panel.frame = CGRectMake(_fab.frame.origin.x, _fab.frame.origin.y + 64, 260, 470);
+          }
+          - (void)a1:(UISwitch *)s { gAimbot = s.on; save(); }
+          - (void)a2:(UISwitch *)s { gEsp = s.on; save(); }
+          - (void)a3:(UISwitch *)s { gNpc = s.on; save(); }
+          - (void)a4:(UISwitch *)s { gAnti = s.on; save(); }
+          - (void)a5:(UISwitch *)s { gShowFov = s.on; gFovCircle.hidden = !s.on; save(); }
+          - (void)f1:(UISlider *)s {
+            gAimFov = s.value;
+            gFovCircle.frame = CGRectMake(0, 0, gAimFov * 2, gAimFov * 2);
+            gFovCircle.center = self.view.center;
+            gFovCircle.layer.cornerRadius = gAimFov;
+            save();
+          }
+          - (void)f2:(UISlider *)s { gCamFov = s.value; save(); }
+          - (void)f3:(UISlider *)s { gAimSpeed = s.value; save(); }
+          - (void)f4:(UISlider *)s { gEspRange = s.value; save(); }
+          @end
+
+          // ---------- logica ----------
+          static void *gCache[256];
+          static int gCacheN = 0;
+          static double gLastScan = 0;
+
+          static void *findAll(void *klass) {
+            if (!gFindM || !klass) return NULL;
+            void *type = p_class_get_type(klass);
+            void *args[1] = { type };
+            void *exc = NULL;
+            return p_runtime_invoke(gFindM, NULL, args, &exc);
+          }
+
+          static void scan(void) {
+            double now = CACurrentMediaTime();
+            if (now - gLastScan < 0.25 && gCacheN) return;
+            gLastScan = now; gCacheN = 0;
+            if (!gPlayerCls) return;
+            typedef struct { void *klass; void *mon; void *bounds; uint64_t len; void *v[1]; } Arr;
+            Arr *a = (Arr *)findAll(gPlayerCls);
+            if (a) for (uint64_t i = 0; i < a->len && gCacheN < 256; i++) gCache[gCacheN++] = a->v[i];
+            if (gNpc && gNpcCls) {
+              Arr *b = (Arr *)findAll(gNpcCls);
+              if (b) for (uint64_t i = 0; i < b->len && gCacheN < 256; i++) gCache[gCacheN++] = b->v[i];
+            }
+          }
+
+          static void *localPlayer(void) {
+            if (gLocalCls && gLocalF[0]) {
+              void *o = staticObj(gLocalCls, gLocalF);
+              if (o) return o;
+            }
+            for (int i = 0; i < gCacheN; i++) {
+              void *o = gCache[i];
+              if (!o) continue;
+              if (oLocal1 && readB(o, oLocal1)) return o;
+              if (oLocal2 && readB(o, oLocal2)) return o;
+            }
+            return NULL;
+          }
+
+          static CGPoint w2s(void *cam, V3 wp, CGFloat scale, BOOL *ok) {
+            V3 sp = p_w2s(cam, wp);
+            *ok = (sp.z > 0.01f);
+            return CGPointMake(sp.x / scale, sp.y / scale);
+          }
+          static float ang(V3 a, V3 b) {
+            float d = a.x*b.x + a.y*b.y + a.z*b.z;
+            float la = sqrtf(a.x*a.x+a.y*a.y+a.z*a.z), lb = sqrtf(b.x*b.x+b.y*b.y+b.z*b.z);
+            if (la < 1e-5f || lb < 1e-5f) return 0;
+            float c = d / (la*lb);
+            if (c > 1) c = 1; if (c < -1) c = -1;
+            return acosf(c) * 57.29578f;
+          }
+
+          static void tick(CADisplayLink *l) {
+            if (!gReady) return;
+            static double last = 0;
+            double now = CACurrentMediaTime();
+            float dt = last ? (float)(now - last) : 0.016f;
+            if (dt > 0.1f) dt = 0.1f;
+            last = now;
+
+            [gSegs removeAllObjects]; [gLabels removeAllObjects];
+            scan();
+
+            void *cam = p_cam_main();
+            if (!cam) { [gOverlay setNeedsDisplay]; return; }
+            void *camT = p_comp_transform(cam);
+            if (!camT) { [gOverlay setNeedsDisplay]; return; }
+            V3 camPos = p_get_pos(camT);
+            Quat camRot = p_get_rot(camT);
+
+            void *local = localPlayer();
+            if (local) { void *lt = p_comp_transform(local); if (lt) camPos = p_get_pos(lt); }
+            int lteam = local ? readInt(local, oTeam) : -1;
+
+            CGFloat viewW = gOverlay.bounds.size.width;
+            CGFloat scale = 1.0;
+            if (p_screen_w && p_screen_w() > 0 && viewW > 0) scale = (CGFloat)p_screen_w() / viewW;
+
+            CGPoint center = CGPointMake(gOverlay.bounds.size.width / 2, gOverlay.bounds.size.height / 2);
+            void *best = NULL; float bestD = 1e9f;
+
+            for (int i = 0; i < gCacheN; i++) {
+              void *e = gCache[i];
+              if (!e || e == local) continue;
+              if (oDead && readB(e, oDead)) continue;
+              if (oHp && readF(e, oHp) <= 0.01f) continue;
+
+              void *t = p_comp_transform(e);
+              if (!t) continue;
+              V3 p = p_get_pos(t);
+              float d = dist3(camPos, p);
+              if (d > 200.0f) continue;
+
+              BOOL enemy = YES;
+              if (oTeam) { int tm = readInt(e, oTeam); if (tm != -1 && lteam != -1) enemy = (tm != lteam); }
+              if (!enemy) continue;
+
+              void *head = findBone(t, kHead, 6);
+              if (!head) continue;
+              BOOL ok = NO;
+              CGPoint sp = w2s(cam, p_get_pos(head), scale, &ok);
+
+              if (gAimbot && ok) {
+                float sd = hypotf(sp.x - center.x, sp.y - center.y);
+                if (sd < gAimFov && sd < bestD) { bestD = sd; best = e; }
+              }
+
+              if (gEsp && d <= gEspRange) {
+                const char **names[8] = { kHead, kNeck, kChest, kHips, kLH, kRH, kLF, kRF };
+                int counts[8] = { 6, 4, 6, 5, 4, 4, 4, 4 };
+                CGPoint pts[8]; BOOL okp[8];
+                for (int b = 0; b < 8; b++) {
+                  void *bt = findBone(t, names[b], counts[b]);
+                  okp[b] = NO;
+                  if (!bt) continue;
+                  pts[b] = w2s(cam, p_get_pos(bt), scale, &okp[b]);
+                }
+                int pairs[8][2] = {{0,1},{1,2},{2,3},{3,6},{3,7},{2,4},{2,5},{0,3}};
+                for (int k = 0; k < 8; k++) {
+                  int a1 = pairs[k][0], b1 = pairs[k][1];
+                  if (!okp[a1] || !okp[b1]) continue;
+                  Seg s; s.a = pts[a1]; s.b = pts[b1]; s.npc = NO;
+                  [gSegs addObject:[NSValue valueWithBytes:&s objCType:@encode(Seg)]];
+                }
+                [gLabels addObject:[NSValue valueWithBytes:&sp objCType:@encode(CGPoint)]];
+              }
+            }
+
+            if (gAimbot && best) {
+              void *bt = p_comp_transform(best);
+              void *head = bt ? findBone(bt, kHead, 6) : NULL;
+              if (head) {
+                V3 tp = p_get_pos(head);
+                tp.x += ((rand() % 100) - 50) * 0.0004f;
+                tp.y += ((rand() % 100) - 50) * 0.0004f;
+                tp.z += ((rand() % 100) - 50) * 0.0004f;
+                V3 dir = (V3){ tp.x - camPos.x, tp.y - camPos.y, tp.z - camPos.z };
+                V3 up = (V3){0,1,0};
+                if (fabsf(dir.x) < 0.01f && fabsf(dir.z) < 0.01f) up = (V3){0,0,1};
+                Quat want = p_look_rot(dir, up);
+                float dAng = ang((V3){0,0,-1}, dir);
+                float step = gAimSpeed * dt;
+                float k = (dAng > 0.01f) ? MIN(1.0f, step / dAng) : 1.0f;
+                p_set_rot(camT, p_slerp(camRot, want, k));
+              }
+            }
+
+            [gOverlay setNeedsDisplay];
+          }
+
+          - (void)dummy { }
+
+          // ---------- arranque ----------
+          static void *boot(void *arg) {
+            for (int i = 0; i < 900; i++) {
+              if (resolveIl2Cpp()) break;
+              usleep(100000);
+            }
+            if (!p_domain_get || !p_domain_get()) return NULL;
+
+            for (int i = 0; i < (int)(sizeof(kPlayerCls)/sizeof(*kPlayerCls)) && !gPlayerCls; i++)
+              gPlayerCls = cls(kPlayerCls[i]);
+            if (!gPlayerCls) return NULL;
+            for (int i = 0; i < (int)(sizeof(kNpcCls)/sizeof(*kNpcCls)) && !gNpcCls; i++)
+              gNpcCls = cls(kNpcCls[i]);
+
+            gObjCls = clsNS("UnityEngine", "Object");
+            if (gObjCls) gFindM = p_method_from_name(gObjCls, "FindObjectsOfType", 1);
+
+            oTeam = off(gPlayerCls, "team");
+            if (!oTeam) oTeam = off(gPlayerCls, "Team");
+            if (!oTeam) oTeam = off(gPlayerCls, "teamId");
+            oHp = off(gPlayerCls, "hp");
+            if (!oHp) oHp = off(gPlayerCls, "health");
+            oDead = off(gPlayerCls, "isDead");
+            if (!oDead) oDead = off(gPlayerCls, "dead");
+            oLocal1 = off(gPlayerCls, "isLocalPlayer");
+            oLocal2 = off(gPlayerCls, "isMine");
+
+            for (int i = 0; i < (int)(sizeof(kMgrCls)/sizeof(*kMgrCls)) && !gLocalCls; i++) {
+              void *m = cls(kMgrCls[i]);
+              if (!m) continue;
+              for (int j = 0; j < (int)(sizeof(kLocalSt)/sizeof(*kLocalSt)); j++) {
+                if (p_field_from_name(m, kLocalSt[j])) {
+                  gLocalCls = m;
+                  strlcpy(gLocalF, kLocalSt[j], sizeof(gLocalF));
+                  break;
+                }
+              }
+            }
+
+            gReady = YES;
+            dispatch_async(dispatch_get_main_queue(), ^{
+              UIWindowScene *sc = nil;
+              for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
+                if ([s isKindOfClass:[UIWindowScene class]]) { sc = (UIWindowScene *)s; break; }
+              gWin = sc ? [[_BSWin alloc] initWithWindowScene:sc]
+                        : [[_BSWin alloc] initWithFrame:UIScreen.mainScreen.bounds];
+              gWin.windowLevel = UIWindowLevelAlert + 1;
+              gWin.backgroundColor = [UIColor clearColor];
+              _BSMenu *m = [_BSMenu new];
+              gWin.rootViewController = m;
+              [gWin makeKeyAndVisible];
+              m.link = [CADisplayLink displayLinkWithTarget:m selector:@selector(tick:)];
+              [m.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+            });
+            return NULL;
+          }
+
+          __attribute__((constructor))
+          static void init(void) {
+            load();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
+                           dispatch_get_global_queue(0, 0), ^{ installAnti(); });
+            pthread_t th;
+            pthread_create(&th, NULL, boot, NULL);
+            pthread_detach(th);
           }
           EOF
 
-      - name: Compilar Dylib
-        run: make FINALPACKAGE=1
+      - name: build
+        run: |
+          ls -l libbs.xm
+          make package FINALPACKAGE=1 DEBUG=0 STRIP=1
 
-      - name: Subir Dylib
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ianSakPanel-dylib
-          path: .theos/obj/**/*.dylib
-          if-no-files-found: error
+          name: deb
+          path: packages/*.deb
