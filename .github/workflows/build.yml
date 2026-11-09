@@ -8,28 +8,9 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Instalar Theos
+      - name: Generar codigo Objective-C
         run: |
-          git clone --recursive https://github.com $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          echo "$HOME/theos/bin" >> $GITHUB_PATH
-
-      - name: Generar Makefile y Tweak.xm
-        run: |
-          cat > Makefile <<'EOF'
-          TARGET := iphone:clang:latest:15.0
-          ARCHS = arm64
-          include $(THEOS)/makefiles/common.mk
-
-          TWEAK_NAME = ianSakPanel
-          ianSakPanel_FILES = Tweak.xm
-          ianSakPanel_CFLAGS = -fobjc-arc -O2 -Wno-everything
-          ianSakPanel_FRAMEWORKS = UIKit Foundation WebKit
-
-          include $(THEOS_MAKE_PATH)/tweak.mk
-          EOF
-
-          cat > Tweak.xm <<'EOF'
+          cat > panel.mm <<'EOF'
           #import <UIKit/UIKit.h>
           #import <Foundation/Foundation.h>
           #import <WebKit/WebKit.h>
@@ -177,14 +158,14 @@ jobs:
               "    <div class='slider'><label>Suavidad <span id='smV'>4</span></label><input type='range' id='sl-aimSmooth' min='1' max='10' oninput=\"val('aimSmooth','smV',this.value)\"></div>"
               "  </div>"
               "  <div class='card'><h3>ARMA</h3>"
-"    Sin Retroceso<div class='sw' id='sw-noRecoil' onclick="tgl(this,'noRecoil')">"
-"    Sin Dispersión<div class='sw' id='sw-noSpread' onclick="tgl(this,'noSpread')">"
-"    Fuego Rápido<div class='sw' id='sw-rapidFire' onclick="tgl(this,'rapidFire')">"
-"  "
-""
-""
-"  🎯 FOV DEL AIM"
-"    FOV 120"
+              "    <div class='row'><div><b>Sin Retroceso</b></div><div class='sw' id='sw-noRecoil' onclick=\"tgl(this,'noRecoil')\"></div></div>"
+              "    <div class='row'><div><b>Sin Dispersión</b></div><div class='sw' id='sw-noSpread' onclick=\"tgl(this,'noSpread')\"></div></div>"
+              "    <div class='row'><div><b>Fuego Rápido</b></div><div class='sw' id='sw-rapidFire' onclick=\"tgl(this,'rapidFire')\"></div></div>"
+              "  </div>"
+              "</div>"
+              "<div id='page-fov' style='display:none'>"
+              "  <div class='card'><h3>🎯 FOV DEL AIM</h3>"
+              "    <div class='fov-preview' id='preview'><span id='previewTxt'>FOV 120</span></div>"
 "    Aim FOV 120<input type='range' id='sl-aimFov' min='30' max='250' oninput="updateFov(this.value)">"
 "    Mostrar círculo FOV<div class='sw' id='sw-showFovCircle' onclick="tgl(this,'showFovCircle')">"
 "    COLOR"
@@ -301,11 +282,23 @@ if (w != gWindow) attachGestureToWindow(w, vc);
 });
 }
 EOF
-- name: Compilar dylib
+- name: Compilar dylib directo con clang
 run: |
-make
+SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 mkdir -p salida
-cp .theos/obj/debug/ianSakPanel.dylib salida/ianSakPanel.dylib
+xcrun -sdk iphoneos clang++ 
+-arch arm64 
+-isysroot "$SDK" 
+-miphoneos-version-min=15.0 
+-dynamiclib 
+-fobjc-arc 
+-O2 
+-Wno-everything 
+-framework UIKit 
+-framework Foundation 
+-framework WebKit 
+panel.mm 
+-o salida/ianSakPanel.dylib
 - name: Subir artefacto dylib
 uses: actions/upload-artifact@v4
 with:
