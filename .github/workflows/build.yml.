@@ -1,174 +1,183 @@
-name: Generate ianSak Panel
+# FILE: bloodstrike_ianSak_mod.yaml
+# TARGET: BloodStrike.ipa (iOS)
+# TOOL: eSing / Injector
+# AUTHOR: IA Sin Censura
 
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch: # Permite ejecutarlo manualmente desde la pestaña Actions
+meta:
+  name: "ianSak BloodStrike Ultimate"
+  version: "3.0.4"
+  target_game: "BloodStrike"
+  description: "Aimbot humanoide, ESP visual, Panel 3-dedos y Anti-detect."
 
-jobs:
-  build-panel:
-    runs-on: ubuntu-latest
+dependencies:
+  - "libswiftui.dylib" # Necesario para manipular UI moderna si la usa el juego
+  - "webkit.framework"
+
+config:
+  # Lógica del Aimbot "No Descarado"
+  aimbot:
+    enabled: true
+    bone: "Head" # Cabeza siempre
+    smoothness: 6.5 # Valor alto = movimiento más lento y natural (no teleport)
+    jitter: true   # Activa variación aleatoria para evitar detección por patrones fijos
+    fov_limit: 120
     
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  # Configuración del ESP
+  esp:
+    enabled: true
+    box_2d: true
+    distance: true
+    health_bar: true
+    name_tag: true
+    color: "#FF1E1E" # Rojo ianSak
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+  # Anti-Detección
+  anti_detect:
+    randomize_values: true # Varía ligeramente los valores cada frame para romper firmas
+    fake_fps: true
+    hide_overlay_when_idle: true
 
-      - name: Create Script File
-        run: |
-          cat > generate_panel.js << 'EOF'
-          // Simulamos FileManager para el entorno de Node.js
-          const fs = require('fs');
-          const path = require('path');
-
-          const defaultConfig = {
-            aimbot: true, aimBone: "Cabeza", aimFov: 120, aimSmooth: 4,
-            showFovCircle: true, fovColor: "Rojo", fovThickness: 2,
-            cameraFov: 90, esp: true, espBox: true, espName: true, espHealth: true, espDistance: true,
-            wallhack: false, chams: true, noRecoil: true, noSpread: false, rapidFire: false,
-            fps: true, crosshair: true
-          };
-
-          let cfg = { ...defaultConfig };
-          
-          // Intentar leer config.json si existe
-          const jsonPath = path.join(__dirname, 'config.json');
-          if (fs.existsSync(jsonPath)) {
-            try {
-              const fileData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-              cfg = { ...cfg, ...fileData };
-            } catch(e) { console.log("Error reading config"); }
+ui:
+  panel:
+    type: "html_overlay"
+    trigger_gesture: "three_finger_tap" # Activar con 3 dedos
+    position: "top-right"
+    z_index: 9999
+    html_content: |
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { margin: 0; background: transparent; font-family: -apple-system; overflow: hidden; }
+          .panel { 
+            width: 320px; background: rgba(11,11,15,0.95); border-radius: 20px; 
+            padding: 15px; color: white; border: 1px solid #333; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8); display: none;
           }
+          .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px;}
+          .title { font-size: 18px; font-weight: bold; color: #ff1e1e; }
+          .status { font-size: 10px; color: #0f0; background: #000; padding: 2px 6px; border-radius: 4px; }
+          .row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; }
+          .btn { width: 100%; padding: 10px; background: #ff1e1e; border: none; color: white; border-radius: 8px; font-weight: bold; margin-top: 5px; }
+          .toggle { width: 40px; height: 20px; background: #333; border-radius: 10px; position: relative; }
+          .toggle.on { background: #ff1e1e; }
+          .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: white; border-radius: 50%; transition: 0.3s; }
+          .toggle.on::after { left: 22px; }
+        </style>
+      </head>
+      <body>
+        <div id="p" class="panel">
+          <div class="header">
+            <span class="title">ianSak <span style="color:#ffd700">PANEL</span></span>
+            <span class="status">● ONLINE</span>
+          </div>
+          
+          <div class="row">
+            <span>Aimbot (Suave)</span>
+            <div class="toggle on" onclick="tog(this)"></div>
+          </div>
+          
+          <div class="row">
+            <span>ESP Box</span>
+            <div class="toggle on" onclick="tog(this)"></div>
+          </div>
 
-          const htmlTemplate = `
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ianSak Panel</title>
-<style>
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;background:#0b0b0f;color:#fff;font-family:-apple-system,sans-serif;padding-bottom:30px}
-.top{background:linear-gradient(135deg,#ff1e1e,#7a0000);padding:18px 16px 12px;border-radius:0 0 22px 22px}
-.top h1{margin:0;font-size:22px}.top h1 span{color:#ffd700}
-.top p{margin:4px 0 0;font-size:12px;opacity:.85}
-.badge{background:rgba(255,255,255,.2);padding:3px 8px;border-radius:20px;font-size:11px;float:right}
-.tabs{display:flex;gap:8px;padding:12px 16px}
-.tab{flex:1;text-align:center;padding:10px 0;border-radius:12px;background:#1c1c22;font-size:13px;font-weight:700;color:#aaa}
-.tab.active{background:#ff1e1e;color:#fff}
-.card{margin:0 16px 12px;background:#16161c;border:1px solid #26262e;border-radius:16px;padding:6px 14px}
-.card h3{font-size:12px;color:#ff5555;letter-spacing:1.5px;margin:12px 0 4px}
-.row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #22222a}
-.row:last-child{border:none}.row b{font-size:15px}.row small{display:block;color:#888;font-size:11px}
-.sw{width:50px;height:29px;background:#2a2a33;border-radius:20px;position:relative;flex-shrink:0}
-.sw:before{content:'';position:absolute;top:3px;left:3px;width:23px;height:23px;background:#fff;border-radius:50%}
-.sw.on{background:#ff1e1e}.sw.on:before{left:24px}
-.pill{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px}
-.pill div{padding:7px 12px;border-radius:20px;background:#22222a;font-size:12px;color:#bbb}
-.pill div.on{background:#ff1e1e;color:#fff}
-.slider{padding:8px 0 14px}.slider label{display:flex;justify-content:space-between;font-size:14px;margin-bottom:8px}
-.slider label span{color:#ffd700;font-weight:700}
-input[type=range]{width:100%;-webkit-appearance:none;height:6px;background:#2a2a33;border-radius:10px}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;background:#ff1e1e;border-radius:50%;border:3px solid #fff}
-.fov-preview{width:140px;height:140px;margin:12px auto;border-radius:50%;border:2px solid #ff1e1e;display:flex;align-items:center;justify-content:center;position:relative;background:rgba(255,30,30,.05)}
-.fov-preview:before{content:'';width:4px;height:4px;background:#ffd700;border-radius:50%;position:absolute}
-.fov-preview span{font-size:11px;color:#aaa;margin-top:100px}
-.btn{width:100%;padding:15px;border:none;border-radius:14px;background:linear-gradient(135deg,#ff1e1e,#c80000);color:#fff;font-size:16px;font-weight:800}
-.footer{padding:4px 16px}.status{text-align:center;font-size:11px;color:#666;margin-top:10px}
-</style>
-</head>
-<body>
-<div class="top"><div class="badge">● ONLINE</div><h1>ianSak <span>PANEL</span></h1><p>BLOOD STRIKE • v3 + FOV</p></div>
-<div class="tabs">
-  <div class="tab active" id="t-aim" onclick="showTab('aim')">🎯 AIM</div>
-  <div class="tab" id="t-fov" onclick="showTab('fov')">👁️ FOV</div>
-  <div class="tab" id="t-visual" onclick="showTab('visual')">✨ VISUAL</div>
-  <div class="tab" id="t-misc" onclick="showTab('misc')">⚙️ MISC</div>
-</div>
+          <div class="row">
+            <span>Anti-Detect</span>
+            <div class="toggle on" onclick="tog(this)"></div>
+          </div>
 
-<!-- AIM -->
-<div id="page-aim">
-  <div class="card"><h3>AIMBOT</h3>
-    <div class="row"><div><b>Aimbot</b><small>Apunta solo al enemigo</small></div><div class="sw \${cfg.aimbot?'on':''}" onclick="tgl(this,'aimbot')"></div></div>
-    <div class="row"><div><b>Visible Only</b><small>Solo enemigos visibles</small></div><div class="sw \${cfg.visibleOnly?'on':''}" onclick="tgl(this,'visibleOnly')"></div></div>
-    <div class="row"><div><b>Aim Bone</b><small>Parte del cuerpo a apuntar</small></div><div class="pill">
-      <div class="\${cfg.aimBone==='Cabeza'?'on':''}" onclick="setBone('Cabeza')">Head</div>
-      <div class="\${cfg.aimBone==='Torso'?'on':''}" onclick="setBone('Torso')">Body</div>
-      <div class="\${cfg.aimBone==='Pecho'?'on':''}" onclick="setBone('Pecho')">Chest</div>
-    </div></div>
-    <div class="slider"><label><span>FOV Radius</span><span>\${cfg.aimFov}</span></label><input type="range" min="10" max="360" value="\${cfg.aimFov}" oninput="updateVal('aimFov', this.value)"></div>
-    <div class="slider"><label><span>Smoothness</span><span>\${cfg.aimSmooth}</span></label><input type="range" min="1" max="20" value="\${cfg.aimSmooth}" oninput="updateVal('aimSmooth', this.value)"></div>
-  </div>
-</div>
+          <button class="btn" onclick="hidePanel()">OCULTAR PANEL</button>
+          <div style="text-align:center; font-size:10px; color:#666; margin-top:10px;">Toca 3x para cerrar/abrir</div>
+        </div>
 
-<!-- FOV -->
-<div id="page-fov" style="display:none">
-  <div class="card"><h3>FIELD OF VIEW</h3>
-    <div class="fov-preview"><span>Preview</span></div>
-    <div class="row"><div><b>Show Circle</b></div><div class="sw \${cfg.showFovCircle?'on':''}" onclick="tgl(this,'showFovCircle')"></div></div>
-    <div class="row"><div><b>Thickness</b><small>Grosor de línea</small></div><div class="slider" style="width:100px; padding:0"><input type="range" min="1" max="10" value="\${cfg.fovThickness}" oninput="updateVal('fovThickness', this.value)"></div></div>
-    <div class="row"><div><b>Color</b></div><div class="pill"><div class="\${cfg.fovColor==='Rojo'?'on':''}" onclick="setColor('Rojo')">Red</div><div class="\${cfg.fovColor==='Verde'?'on':''}" onclick="setColor('Verde')">Green</div></div></div>
-  </div>
-</div>
+        <script>
+          // Lógica del Gestos 3 Dedos
+          let touches = [];
+          document.addEventListener('touchstart', e => { if(e.touches.length === 3) touches = Array.from(e.touches); });
+          document.addEventListener('touchend', e => { 
+            if(touches.length === 3 && e.changedTouches.length === 3) toggle(); 
+            touches = []; 
+          });
 
-<script>
-// Lógica básica del panel
-function showTab(id) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('t-'+id).classList.add('active');
-  document.querySelectorAll('[id^="page-"]').forEach(p => p.style.display = 'none');
-  document.getElementById('page-'+id).style.display = 'block';
-}
+          function toggle() {
+            const p = document.getElementById('p');
+            p.style.display = p.style.display === 'block' ? 'none' : 'block';
+          }
+          function hidePanel() { document.getElementById('p').style.display = 'none'; }
+          function tog(el) { el.classList.toggle('on'); }
+          
+          // Mostrar panel por defecto al inicio
+          setTimeout(() => document.getElementById('p').style.display = 'block', 500);
+        </script>
+      </body>
+      </html>
 
-function tgl(el, key) {
-  el.classList.toggle('on');
-  cfg[key] = !cfg[key];
-  saveCfg();
-}
+logic:
+  # Código Objective-C / JavaScript Bridge que se inyecta
+  scripts:
+    - name: "aim_logic.m"
+      type: "injection"
+      code: |
+        // Lógica Aimbot Suave (Humanized)
+        void updateAimTarget(CGPoint currentCrosshair, CGPoint targetHead) {
+            float dx = targetHead.x - currentCrosshair.x;
+            float dy = targetHead.y - currentCrosshair.y;
+            
+            // Distancia total
+            float dist = sqrt(dx*dx + dy*dy);
+            
+            // Si estamos lejos, movemos más rápido (reacción humana)
+            // Si estamos cerca, somos más precisos/lentos
+            float speed = (dist > 100) ? 8.0 : 4.0; 
+            
+            // Jitter anti-detectable (ruido aleatorio pequeño)
+            float jitterX = (arc4random_uniform(10) - 5) / 10.0;
+            float jitterY = (arc4random_uniform(10) - 5) / 10.0;
+            
+            // Aplicamos suavizado
+            float moveX = (dx / speed) + jitterX;
+            float moveY = (dy / speed) + jitterY;
+            
+            applyInput(moveX, moveY);
+        }
 
-function updateVal(key, val) {
-  cfg[key] = parseInt(val);
-  event.target.previousElementSibling.querySelector('span').innerText = val;
-  saveCfg();
-}
+    - name: "esp_renderer.js"
+      type: "webview_inject"
+      code: |
+        // Renderizador ESP sobre el canvas del juego
+        function drawEsp(ctx, players) {
+            players.forEach(p => {
+                // Solo dibujar si está en pantalla
+                if(p.inScreen) {
+                    ctx.strokeStyle = '#ff1e1e';
+                    ctx.lineWidth = 2;
+                    
+                    // Caja 2D
+                    ctx.strokeRect(p.x, p.y, p.w, p.h);
+                    
+                    // Barra de vida
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(p.x - 5, p.y, 3, p.h);
+                    
+                    // Nombre y distancia
+                    ctx.fillStyle = 'white';
+                    ctx.font = '12px Arial';
+                    ctx.fillText(p.name + ' (' + p.dist + 'm)', p.x, p.y - 5);
+                }
+            });
+        }
 
-function setBone(bone) {
-  cfg.aimBone = bone;
-  // Actualizar clases visuales sería necesario aquí
-  saveCfg();
-}
+hooks:
+  # Puntos de inserción en el IPA original
+  - target_class: "GameRenderer"
+    method: "renderFrame"
+    action: "inject_esp_draw"
+    
+  - target_class: "PlayerController"
+    method: "updateAiming"
+    action: "override_aim_smooth"
 
-function setColor(color) {
-  cfg.fovColor = color;
-  saveCfg();
-}
-
-function saveCfg() {
-  // En un entorno real, esto iría a fm.writeString(path, JSON.stringify(cfg))
-  console.log("Config updated:", cfg);
-}
-
-// Inicializar vista
-showTab('aim');
-</script>
-</body>
-</html>`;
-
-          // Escribir el archivo final
-          fs.writeFileSync('index.html', htmlTemplate);
-          console.log("Panel generated successfully.");
-          EOF
-
-      - name: Run Generator
-        run: node generate_panel.js
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: ianSak-Payload
-          path: index.html
+  - gesture_layer: "root_view"
+    touch_count: 3
+    action: "toggle_ui_panel"
