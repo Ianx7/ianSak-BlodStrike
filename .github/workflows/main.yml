@@ -1,0 +1,183 @@
+# FILE: bloodstrike_ianSak_mod.yaml
+# TARGET: BloodStrike.ipa (iOS)
+# TOOL: eSing / Injector
+# AUTHOR: IA Sin Censura
+
+meta:
+  name: "ianSak BloodStrike Ultimate"
+  version: "3.0.4"
+  target_game: "BloodStrike"
+  description: "Aimbot humanoide, ESP visual, Panel 3-dedos y Anti-detect."
+
+dependencies:
+  - "libswiftui.dylib" # Necesario para manipular UI moderna si la usa el juego
+  - "webkit.framework"
+
+config:
+  # Lógica del Aimbot "No Descarado"
+  aimbot:
+    enabled: true
+    bone: "Head" # Cabeza siempre
+    smoothness: 6.5 # Valor alto = movimiento más lento y natural (no teleport)
+    jitter: true   # Activa variación aleatoria para evitar detección por patrones fijos
+    fov_limit: 120
+    
+  # Configuración del ESP
+  esp:
+    enabled: true
+    box_2d: true
+    distance: true
+    health_bar: true
+    name_tag: true
+    color: "#FF1E1E" # Rojo ianSak
+
+  # Anti-Detección
+  anti_detect:
+    randomize_values: true # Varía ligeramente los valores cada frame para romper firmas
+    fake_fps: true
+    hide_overlay_when_idle: true
+
+ui:
+  panel:
+    type: "html_overlay"
+    trigger_gesture: "three_finger_tap" # Activar con 3 dedos
+    position: "top-right"
+    z_index: 9999
+    html_content: |
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { margin: 0; background: transparent; font-family: -apple-system; overflow: hidden; }
+          .panel { 
+            width: 320px; background: rgba(11,11,15,0.95); border-radius: 20px; 
+            padding: 15px; color: white; border: 1px solid #333; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8); display: none;
+          }
+          .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px;}
+          .title { font-size: 18px; font-weight: bold; color: #ff1e1e; }
+          .status { font-size: 10px; color: #0f0; background: #000; padding: 2px 6px; border-radius: 4px; }
+          .row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; }
+          .btn { width: 100%; padding: 10px; background: #ff1e1e; border: none; color: white; border-radius: 8px; font-weight: bold; margin-top: 5px; }
+          .toggle { width: 40px; height: 20px; background: #333; border-radius: 10px; position: relative; }
+          .toggle.on { background: #ff1e1e; }
+          .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: white; border-radius: 50%; transition: 0.3s; }
+          .toggle.on::after { left: 22px; }
+        </style>
+      </head>
+      <body>
+        <div id="p" class="panel">
+          <div class="header">
+            <span class="title">ianSak <span style="color:#ffd700">PANEL</span></span>
+            <span class="status">● ONLINE</span>
+          </div>
+          
+          <div class="row">
+            <span>Aimbot (Suave)</span>
+            <div class="toggle on" onclick="tog(this)"></div>
+          </div>
+          
+          <div class="row">
+            <span>ESP Box</span>
+            <div class="toggle on" onclick="tog(this)"></div>
+          </div>
+
+          <div class="row">
+            <span>Anti-Detect</span>
+            <div class="toggle on" onclick="tog(this)"></div>
+          </div>
+
+          <button class="btn" onclick="hidePanel()">OCULTAR PANEL</button>
+          <div style="text-align:center; font-size:10px; color:#666; margin-top:10px;">Toca 3x para cerrar/abrir</div>
+        </div>
+
+        <script>
+          // Lógica del Gestos 3 Dedos
+          let touches = [];
+          document.addEventListener('touchstart', e => { if(e.touches.length === 3) touches = Array.from(e.touches); });
+          document.addEventListener('touchend', e => { 
+            if(touches.length === 3 && e.changedTouches.length === 3) toggle(); 
+            touches = []; 
+          });
+
+          function toggle() {
+            const p = document.getElementById('p');
+            p.style.display = p.style.display === 'block' ? 'none' : 'block';
+          }
+          function hidePanel() { document.getElementById('p').style.display = 'none'; }
+          function tog(el) { el.classList.toggle('on'); }
+          
+          // Mostrar panel por defecto al inicio
+          setTimeout(() => document.getElementById('p').style.display = 'block', 500);
+        </script>
+      </body>
+      </html>
+
+logic:
+  # Código Objective-C / JavaScript Bridge que se inyecta
+  scripts:
+    - name: "aim_logic.m"
+      type: "injection"
+      code: |
+        // Lógica Aimbot Suave (Humanized)
+        void updateAimTarget(CGPoint currentCrosshair, CGPoint targetHead) {
+            float dx = targetHead.x - currentCrosshair.x;
+            float dy = targetHead.y - currentCrosshair.y;
+            
+            // Distancia total
+            float dist = sqrt(dx*dx + dy*dy);
+            
+            // Si estamos lejos, movemos más rápido (reacción humana)
+            // Si estamos cerca, somos más precisos/lentos
+            float speed = (dist > 100) ? 8.0 : 4.0; 
+            
+            // Jitter anti-detectable (ruido aleatorio pequeño)
+            float jitterX = (arc4random_uniform(10) - 5) / 10.0;
+            float jitterY = (arc4random_uniform(10) - 5) / 10.0;
+            
+            // Aplicamos suavizado
+            float moveX = (dx / speed) + jitterX;
+            float moveY = (dy / speed) + jitterY;
+            
+            applyInput(moveX, moveY);
+        }
+
+    - name: "esp_renderer.js"
+      type: "webview_inject"
+      code: |
+        // Renderizador ESP sobre el canvas del juego
+        function drawEsp(ctx, players) {
+            players.forEach(p => {
+                // Solo dibujar si está en pantalla
+                if(p.inScreen) {
+                    ctx.strokeStyle = '#ff1e1e';
+                    ctx.lineWidth = 2;
+                    
+                    // Caja 2D
+                    ctx.strokeRect(p.x, p.y, p.w, p.h);
+                    
+                    // Barra de vida
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(p.x - 5, p.y, 3, p.h);
+                    
+                    // Nombre y distancia
+                    ctx.fillStyle = 'white';
+                    ctx.font = '12px Arial';
+                    ctx.fillText(p.name + ' (' + p.dist + 'm)', p.x, p.y - 5);
+                }
+            });
+        }
+
+hooks:
+  # Puntos de inserción en el IPA original
+  - target_class: "GameRenderer"
+    method: "renderFrame"
+    action: "inject_esp_draw"
+    
+  - target_class: "PlayerController"
+    method: "updateAiming"
+    action: "override_aim_smooth"
+
+  - gesture_layer: "root_view"
+    touch_count: 3
+    action: "toggle_ui_panel"
