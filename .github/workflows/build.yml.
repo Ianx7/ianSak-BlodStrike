@@ -1,4 +1,4 @@
-name: build
+name: Build Dylib Only
 on: [push, workflow_dispatch]
 
 jobs:
@@ -10,43 +10,29 @@ jobs:
       - name: Setup Theos
         uses: theos/setup-theos@v1
 
-      - name: Crear archivos del Panel
+      - name: Build ianSakPanel Dylib
         run: |
-          cat << 'EOF' > Makefile
+          # 1. Crear Makefile para library (dylib)
+          cat > Makefile << 'EOF'
           ARCHS = arm64
           TARGET := iphone:clang:latest:14.0
-          include $(THEOS)/makefiles/common.mk
-
+          
+          include $(THEOS)/makefiles/library.mk
+          
           TWEAK_NAME = ianSakPanel
           ianSakPanel_FILES = Tweak.xm
           ianSakPanel_CFLAGS = -fobjc-arc
           ianSakPanel_FRAMEWORKS = UIKit WebKit CoreGraphics
-
-          include $(THEOS_MAKE_PATH)/tweak.mk
           EOF
 
-          cat << 'EOF' > control
-          Package: com.iansak.panel
-          Name: ianSakPanel
-          Version: 3.0.0
-          Architecture: iphoneos-arm64
-          Description: Panel flotante Blood Strike
-          Maintainer: ianSak
-          Author: ianSak
-          Section: Tweaks
-          EOF
-
-          cat << 'EOF' > Tweak.xm
+          # 2. Crear Tweak.xm completo
+          cat > Tweak.xm << 'EOF'
           #import <UIKit/UIKit.h>
           #import <WebKit/WebKit.h>
-          #import <dlfcn.h>
 
           @interface IanSakFloatingMenu : NSObject <WKScriptMessageHandler>
           @property (nonatomic, strong) UIButton *floatingBtn;
           @property (nonatomic, strong) UIView *menuContainer;
-          @property (nonatomic, strong) WKWebView *webView;
-          @property (nonatomic, strong) NSMutableDictionary *cfg;
-          @property (nonatomic, strong) NSString *configPath;
           + (instancetype)sharedInstance;
           - (void)setupInWindow:(UIWindow *)window;
           @end
@@ -65,136 +51,71 @@ jobs:
           - (void)setupInWindow:(UIWindow *)window {
               if (!window || self.floatingBtn) return;
 
-              NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-              self.configPath = [paths.firstObject stringByAppendingPathComponent:@"ianSak-panel.json"];
-
-              self.cfg = [@{
-                  @"aimbot": @YES, @"aimBone": @"Cabeza", @"aimFov": @120, @"aimSmooth": @4,
-                  @"showFovCircle": @YES, @"fovColor": @"Rojo", @"fovThickness": @2, @"cameraFov": @90,
-                  @"esp": @YES, @"espBox": @YES, @"espName": @YES, @"espHealth": @YES,
-                  @"espDistance": @YES, @"wallhack": @NO, @"chams": @YES, @"noRecoil": @YES,
-                  @"noSpread": @NO, @"rapidFire": @NO, @"fps": @YES, @"crosshair": @YES
-              } mutableCopy];
-
-              if ([[NSFileManager defaultManager] fileExistsAtPath:self.configPath]) {
-                  NSData *data = [NSData dataWithContentsOfFile:self.configPath];
-                  NSDictionary *saved = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                  if (saved) [self.cfg addEntriesFromDictionary:saved];
-              }
-
+              // Botón flotante
               self.floatingBtn = [UIButton buttonWithType:UIButtonTypeCustom];
               self.floatingBtn.frame = CGRectMake(30, 120, 55, 55);
               self.floatingBtn.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.12 alpha:0.95];
               self.floatingBtn.layer.cornerRadius = 27.5;
               self.floatingBtn.layer.borderWidth = 2.0;
               self.floatingBtn.layer.borderColor = [UIColor redColor].CGColor;
-              self.floatingBtn.clipsToBounds = YES;
-
-              // Simple logo placeholder or text
+              
               [self.floatingBtn setTitle:@"⚙️" forState:UIControlStateNormal];
               self.floatingBtn.titleLabel.font = [UIFont systemFontOfSize:24];
+              
               [self.floatingBtn addTarget:self action:@selector(toggleMenu) forControlEvents:UIControlEventTouchUpInside];
-
               [window addSubview:self.floatingBtn];
               [window bringSubviewToFront:self.floatingBtn];
-
-              NSLog(@"[IanSakPanel] Floating menu installed.");
+              
+              NSLog(@"[IanSakPanel] Dylib injected successfully.");
           }
 
           - (void)toggleMenu {
               if (self.menuContainer) {
                   [UIView animateWithDuration:0.3 animations:^{
                       self.menuContainer.alpha = 0;
-                      self.menuContainer.transform = CGAffineTransformMakeScale(0.8, 0.8);
                   } completion:^(BOOL finished) {
                       [self.menuContainer removeFromSuperview];
                       self.menuContainer = nil;
                   }];
               } else {
-                  [self createMenu];
+                  self.menuContainer = [[UIView alloc] initWithFrame:CGRectMake(30, 190, 280, 400)];
+                  self.menuContainer.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.95];
+                  self.menuContainer.layer.cornerRadius = 15;
+                  
+                  UILabel *header = [[UILabel alloc] initWithFrame:CGRectMake(10, 10, 260, 30)];
+                  header.text = @"🩸 Blood Strike Panel";
+                  header.textColor = [UIColor whiteColor];
+                  header.font = [UIFont boldSystemFontOfSize:16];
+                  [self.menuContainer addSubview:header];
+                  
+                  // Simple UI placeholder
+                  UILabel *info = [[UILabel alloc] initWithFrame:CGRectMake(10, 50, 260, 20)];
+                  info.text = @"Configuración activa";
+                  info.textColor = [UIColor grayColor];
+                  [self.menuContainer addSubview:info];
+
+                  [UIApplication.sharedApplication.keyWindow addSubview:self.menuContainer];
+                  [UIView animateWithDuration:0.3 animations:^{
+                      self.menuContainer.alpha = 1;
+                  }];
               }
           }
 
-          - (void)createMenu {
-              self.menuContainer = [[UIView alloc] initWithFrame:CGRectMake(30, 190, 300, 400)];
-              self.menuContainer.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.95];
-              self.menuContainer.layer.cornerRadius = 15;
-              self.menuContainer.layer.borderWidth = 1;
-              self.menuContainer.layer.borderColor = [UIColor redColor].CGColor;
-              self.menuContainer.alpha = 0;
-              self.menuContainer.transform = CGAffineTransformMakeScale(0.8, 0.8);
-
-              UILabel *header = [[UILabel alloc] initWithFrame:CGRectMake(10, 10, 280, 30)];
-              header.text = @"🩸 Blood Strike Panel";
-              header.textColor = [UIColor whiteColor];
-              header.font = [UIFont boldSystemFontOfSize:16];
-              [self.menuContainer addSubview:header];
-
-              UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(10, 50, 280, 330)];
-              scrollView.showsVerticalScrollIndicator = YES;
-
-              CGFloat yOffset = 0;
-              for (NSString *key in self.cfg) {
-                  UIView *row = [self createToggleRowForKey:key value:self.cfg[key] yOffset:yOffset];
-                  [scrollView addSubview:row];
-                  yOffset += 50;
-              }
-
-              [self.menuContainer addSubview:scrollView];
-              [UIApplication.sharedApplication.keyWindow addSubview:self.menuContainer];
-              
-              [UIView animateWithDuration:0.3 animations:^{
-                  self.menuContainer.alpha = 1;
-                  self.menuContainer.transform = CGAffineTransformIdentity;
-              }];
-          }
-
-          - (UIView *)createToggleRowForKey:(NSString *)key value:(id)value yOffset:(CGFloat)yOffset {
-              UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, yOffset, 280, 40)];
-              
-              UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(10, 10, 150, 20)];
-              label.text = [key stringByReplacingOccurrencesOfString:@"_" withString:@" "];
-              label.textColor = [UIColor whiteColor];
-              label.font = [UIFont systemFontOfSize:14];
-              [row addSubview:label];
-
-              UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(210, 8, 0, 0)];
-              sw.on = [value boolValue];
-              [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
-              [sw setTag:[key hash]]; // Simple tag for identification
-              [row addSubview:sw];
-
-              return row;
-          }
-
-          - (void)switchChanged:(UISwitch *)sender {
-              // In a real tweak, you'd map the switch back to the key. 
-              // For this simplified version, we just log.
-              NSLog(@"[IanSakPanel] Switch toggled: %@", sender.isOn ? @"ON" : @"OFF");
-              [self saveConfig];
-          }
-
-          - (void)saveConfig {
-              NSError *error;
-              NSData *data = [NSJSONSerialization dataWithJSONObject:self.cfg options:0 error:&error];
-              if (!error && self.configPath) {
-                  [data writeToFile:self.configPath atomically:YES];
-                  NSLog(@"[IanSakPanel] Config saved.");
-              }
-          }
-
-          #pragma mark - WKScriptMessageHandler
-          - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-              NSLog(@"[IanSakPanel] JS Message: %@", message.body);
-          }
-
+          - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {}
           @end
 
-          %hook UIApplication
-          - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-              BOOL res = %orig;
-              [[IanSakFloatingMenu sharedInstance] setupInWindow:[UIApplication sharedApplication].keyWindow];
-              return res;
+          %ctor {
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  [[IanSakFloatingMenu sharedInstance] setupInWindow:[UIApplication sharedApplication].keyWindow];
+              });
           }
-          %end
           EOF
+
+          # 3. Compilar
+          make package
+
+      - name: Upload Dylib Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ianSakPanel.dylib
+          path: packages/*.dylib
