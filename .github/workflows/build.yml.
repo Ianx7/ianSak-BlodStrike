@@ -1,0 +1,36 @@
+name: Build ianSak Panel
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: 'latest'
+
+    - name: Build Project (Simulado)
+      run: |
+        echo "Verifying assets..."
+        # Aquí podrías agregar comandos reales de compilación si tienes un .xcodeproj
+        ls -la
+        
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ianSak-Payload
+        path: |
+          index.html
+          style.css
+          script.js
+          # Agrega aquí tus otros archivos si los tienes separados
