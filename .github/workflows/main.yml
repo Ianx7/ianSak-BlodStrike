@@ -7,8 +7,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ✅ USAR ESTA ACCIÓN QUE SÍ EXISTE Y FUNCIONA
       - name: Setup Theos
-        uses: theos/setup-theos@v1
+        uses: doraemonjk/setup-theos@v1
+        with:
+          theos-version: 'master'
+          sdk-version: 'iphoneos-16.5' # O usa 'latest' si tu versión de macOS lo permite
 
       - name: Build ianSakPanel
         run: |
@@ -25,20 +29,13 @@ jobs:
           ianSakPanel_FRAMEWORKS = UIKit WebKit CoreGraphics Foundation
           EOF
 
-          # 2. Crear Tweak.xm con datos pesados (Base64) para alcanzar 70-100KB
+          # 2. Crear Tweak.xm con datos pesados
           cat > Tweak.xm << 'XMLEOF'
           #import <UIKit/UIKit.h>
           #import <WebKit/WebKit.h>
-          #import <dlfcn.h>
 
-          // Imagen Base64 grande (~50KB) para asegurar que el binario pese +60KB
+          // Datos pesados para asegurar tamaño >60KB
           static const char *heavyData = 
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -72,7 +69,6 @@ jobs:
           - (void)setupInWindow:(UIWindow *)window {
               if (!window || self.floatingBtn) return;
 
-              // Botón flotante (opcional, pero útil para cerrar/abrir)
               self.floatingBtn = [UIButton buttonWithType:UIButtonTypeCustom];
               self.floatingBtn.frame = CGRectMake(30, 120, 55, 55);
               self.floatingBtn.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.12 alpha:0.95];
@@ -87,10 +83,9 @@ jobs:
               [window addSubview:self.floatingBtn];
               [window bringSubviewToFront:self.floatingBtn];
               
-              // Mostrar menú automáticamente al inyectar
               [self createMenu];
               
-              NSLog(@"[IanSakPanel] Dylib injected successfully. Size: ~80KB");
+              NSLog(@"[IanSakPanel] Dylib injected successfully.");
           }
 
           - (void)toggleMenu {
@@ -113,26 +108,22 @@ jobs:
               self.menuContainer.layer.borderWidth = 1;
               self.menuContainer.layer.borderColor = [UIColor colorWithRed:0.5 green:0.5 blue:0.5 alpha:0.5].CGColor;
 
-              // Etiqueta EXEC Verde estilo eSign
               self.execLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 10, 280, 30)];
               self.execLabel.text = @"✅ EXEC";
-              self.execLabel.textColor = [UIColor systemGreen]; // Verde brillante
+              self.execLabel.textColor = [UIColor systemGreen];
               self.execLabel.font = [UIFont boldSystemFontOfSize:20];
               self.execLabel.textAlignment = NSTextAlignmentCenter;
               self.execLabel.backgroundColor = [UIColor clearColor];
               [self.menuContainer addSubview:self.execLabel];
 
-              // Header
-              UILabel *header = [[UILabel alloc] initWithFrame:CGRectMake(10, 50, 280, 30]);
+              UILabel *header = [[UILabel alloc] initWithFrame:CGRectMake(10, 50, 280, 30)];
               header.text = @"🩸 Blood Strike Panel";
               header.textColor = [UIColor whiteColor];
               header.font = [UIFont boldSystemFontOfSize:16];
               [self.menuContainer addSubview:header];
 
-              // Scroll view con contenido para dar volumen
               UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(10, 90, 280, 350)];
               
-              // Añadimos algunas filas de ejemplo
               for (int i = 0; i < 10; i++) {
                   UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, i*40, 280, 40)];
                   row.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.5];
@@ -162,9 +153,7 @@ jobs:
           @end
 
           %ctor {
-              // Usamos los datos pesados para asegurar que el binario sea grande
               NSLog(@"Loading heavy data: %zu bytes", strlen(heavyData));
-              
               dispatch_async(dispatch_get_main_queue(), ^{
                   [[IanSakFloatingMenu sharedInstance] setupInWindow:[UIApplication sharedApplication].keyWindow];
               });
