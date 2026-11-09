@@ -1,4 +1,4 @@
-name: Build Dylib Only
+name: build
 on: [push, workflow_dispatch]
 
 jobs:
@@ -10,29 +10,42 @@ jobs:
       - name: Setup Theos
         uses: theos/setup-theos@v1
 
-      - name: Build ianSakPanel Dylib
+      - name: Crear archivos del Panel
         run: |
-          # 1. Crear Makefile para library (dylib)
-          cat > Makefile << 'EOF'
+          cat << 'EOF' > Makefile
           ARCHS = arm64
           TARGET := iphone:clang:latest:14.0
-          
-          include $(THEOS)/makefiles/library.mk
-          
+          include $(THEOS)/makefiles/common.mk
+
           TWEAK_NAME = ianSakPanel
           ianSakPanel_FILES = Tweak.xm
           ianSakPanel_CFLAGS = -fobjc-arc
           ianSakPanel_FRAMEWORKS = UIKit WebKit CoreGraphics
+
+          include $(THEOS_MAKE_PATH)/tweak.mk
           EOF
 
-          # 2. Crear Tweak.xm completo
-          cat > Tweak.xm << 'EOF'
+          cat << 'EOF' > control
+          Package: com.iansak.panel
+          Name: ianSakPanel
+          Version: 3.0.0
+          Architecture: iphoneos-arm64
+          Description: Panel flotante Blood Strike
+          Maintainer: ianSak
+          Author: ianSak
+          Section: Tweaks
+          EOF
+
+          cat << 'EOF' > Tweak.xm
           #import <UIKit/UIKit.h>
           #import <WebKit/WebKit.h>
 
           @interface IanSakFloatingMenu : NSObject <WKScriptMessageHandler>
           @property (nonatomic, strong) UIButton *floatingBtn;
           @property (nonatomic, strong) UIView *menuContainer;
+          @property (nonatomic, strong) WKWebView *webView;
+          @property (nonatomic, strong) NSMutableDictionary *cfg;
+          @property (nonatomic, strong) NSString *configPath;
           + (instancetype)sharedInstance;
           - (void)setupInWindow:(UIWindow *)window;
           @end
@@ -51,71 +64,245 @@ jobs:
           - (void)setupInWindow:(UIWindow *)window {
               if (!window || self.floatingBtn) return;
 
-              // Botón flotante
+              NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+              self.configPath = [paths.firstObject stringByAppendingPathComponent:@"ianSak-panel.json"];
+
+              self.cfg = [@{
+                  @"aimbot": @YES, @"aimBone": @"Cabeza", @"aimFov": @120, @"aimSmooth": @4,
+                  @"showFovCircle": @YES, @"fovColor": @"Rojo", @"fovThickness": @2, @"cameraFov": @90,
+                  @"esp": @YES, @"espBox": @YES, @"espName": @YES, @"espHealth": @YES,
+                  @"espDistance": @YES, @"wallhack": @NO, @"chams": @YES, @"noRecoil": @YES,
+                  @"noSpread": @NO, @"rapidFire": @NO, @"fps": @YES, @"crosshair": @YES
+              } mutableCopy];
+
+              if ([[NSFileManager defaultManager] fileExistsAtPath:self.configPath]) {
+                  NSData *data = [NSData dataWithContentsOfFile:self.configPath];
+                  NSDictionary *saved = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                  if (saved) [self.cfg addEntriesFromDictionary:saved];
+              }
+
               self.floatingBtn = [UIButton buttonWithType:UIButtonTypeCustom];
               self.floatingBtn.frame = CGRectMake(30, 120, 55, 55);
               self.floatingBtn.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.12 alpha:0.95];
               self.floatingBtn.layer.cornerRadius = 27.5;
               self.floatingBtn.layer.borderWidth = 2.0;
               self.floatingBtn.layer.borderColor = [UIColor redColor].CGColor;
-              
-              [self.floatingBtn setTitle:@"⚙️" forState:UIControlStateNormal];
-              self.floatingBtn.titleLabel.font = [UIFont systemFontOfSize:24];
-              
-              [self.floatingBtn addTarget:self action:@selector(toggleMenu) forControlEvents:UIControlEventTouchUpInside];
+              self.floatingBtn.clipsToBounds = YES;
+
+              NSString *logoBase64 = @"";
+              UIImage *logo = nil;
+              if (logoBase64.length > 0) {
+                  NSData *imageData = [[NSData alloc] initWithBase64EncodedString:logoBase64 options:NSDataBase64DecodingIgnoreUnknownCharacters];
+                  logo = [UIImage imageWithData:imageData];
+              } else {
+                  logo = [UIImage imageNamed:@"logo.jpeg"];
+              }
+
+              if (logo) {
+                  [self.floatingBtn setImage:logo forState:UIControlStateNormal];
+                  self.floatingBtn.imageView.contentMode = UIViewContentModeScaleAspectFill;
+                  self.floatingBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentFill;
+                  self.floatingBtn.contentVerticalAlignment = UIControlContentVerticalAlignmentFill;
+              } else {
+                  [self.floatingBtn setTitle:@"iS" forState:UIControlStateNormal];
+                  self.floatingBtn.titleLabel.font = [UIFont boldSystemFontOfSize:20];
+                  [self.floatingBtn setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
+              }
+
+              [self.floatingBtn addTarget:self action:@selector(openMenu) forControlEvents:UIControlEventTouchUpInside];
+              UIPanGestureRecognizer *btnPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
+              [self.floatingBtn addGestureRecognizer:btnPan];
               [window addSubview:self.floatingBtn];
-              [window bringSubviewToFront:self.floatingBtn];
-              
-              NSLog(@"[IanSakPanel] Dylib injected successfully.");
+
+              CGFloat screenW = [UIScreen mainScreen].bounds.size.width;
+              CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
+              self.menuContainer = [[UIView alloc] initWithFrame:CGRectMake((screenW - 340)/2, (screenH - 480)/2, 340, 480)];
+              self.menuContainer.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
+              self.menuContainer.layer.cornerRadius = 22.0;
+              self.menuContainer.layer.borderWidth = 1.5;
+              self.menuContainer.layer.borderColor = [UIColor redColor].CGColor;
+              self.menuContainer.clipsToBounds = YES;
+              self.menuContainer.hidden = YES;
+
+              UIView *dragHandle = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 275, 55)];
+              dragHandle.backgroundColor = [UIColor clearColor];
+              UIPanGestureRecognizer *menuPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
+              [dragHandle addGestureRecognizer:menuPan];
+
+              WKWebViewConfiguration *webConfig = [[WKWebViewConfiguration alloc] init];
+              [webConfig.userContentController addScriptMessageHandler:self name:@"panelAction"];
+              [webConfig.userContentController addScriptMessageHandler:self name:@"panelSave"];
+
+              self.webView = [[WKWebView alloc] initWithFrame:self.menuContainer.bounds configuration:webConfig];
+              self.webView.backgroundColor = [UIColor clearColor];
+              self.webView.opaque = NO;
+
+              [self.menuContainer addSubview:self.webView];
+              [self.menuContainer addSubview:dragHandle];
+              [window addSubview:self.menuContainer];
+
+              NSString *html = @"<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1, user-scalable=no'><style>"
+              @"*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}"
+              @"body{margin:0;background:#0b0b0f;color:#fff;font-family:-apple-system;padding-bottom:20px;overflow-x:hidden}"
+              @".top{background:linear-gradient(135deg,#ff1e1e,#7a0000);padding:14px 16px 12px;border-radius:0 0 18px 18px;display:flex;justify-content:space-between;align-items:center}"
+              @".top h1{margin:0;font-size:19px}.top h1 span{color:#ffd700}"
+              @".top p{margin:2px 0 0;font-size:11px;opacity:.85}"
+              @".min-btn{background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.3);color:#fff;width:32px;height:32px;border-radius:50%;font-weight:bold;font-size:16px;display:flex;align-items:center;justify-content:center}"
+              @".tabs{display:flex;gap:6px;padding:10px 14px}"
+              @".tab{flex:1;text-align:center;padding:8px 0;border-radius:10px;background:#1c1c22;font-size:12px;font-weight:700;color:#aaa}"
+              @".tab.active{background:#ff1e1e;color:#fff}"
+              @".card{margin:0 14px 10px;background:#16161c;border:1px solid #26262e;border-radius:14px;padding:6px 12px}"
+              @".card h3{font-size:11px;color:#ff5555;letter-spacing:1.2px;margin:10px 0 4px}"
+              @".row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #22222a}"
+              @".row:last-child{border:none}.row b{font-size:14px}.row small{display:block;color:#888;font-size:10px}"
+              @".sw{width:46px;height:26px;background:#2a2a33;border-radius:20px;position:relative;flex-shrink:0}"
+              @".sw:before{content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;background:#fff;border-radius:50%;transition:.2s}"
+              @".sw.on{background:#ff1e1e}.sw.on:before{left:23px}"
+              @".pill{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px}"
+              @".pill div{padding:6px 10px;border-radius:16px;background:#22222a;font-size:11px;color:#bbb}"
+              @".pill div.on{background:#ff1e1e;color:#fff}"
+              @".slider{padding:6px 0 12px}.slider label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px}"
+              @".slider label span{color:#ffd700;font-weight:700}"
+              @"input[type=range]{width:100%;-webkit-appearance:none;height:5px;background:#2a2a33;border-radius:10px}"
+              @"input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;background:#ff1e1e;border-radius:50%;border:2px solid #fff}"
+              @".fov-preview{width:110px;height:110px;margin:10px auto;border-radius:50%;border:2px solid #ff1e1e;display:flex;align-items:center;justify-content:center;position:relative;background:rgba(255,30,30,.05)}"
+              @".fov-preview:before{content:'';width:4px;height:4px;background:#ffd700;border-radius:50%;position:absolute}"
+              @".fov-preview span{font-size:10px;color:#aaa;margin-top:80px}"
+              @".btn{width:100%;padding:12px;border:none;border-radius:12px;background:linear-gradient(135deg,#ff1e1e,#c80000);color:#fff;font-size:14px;font-weight:800}"
+              @".footer{padding:4px 14px}"
+              @"</style></head><body>"
+              @"<div class='top'><div><h1>ianSak <span>PANEL</span></h1><p>BLOOD STRIKE • v3</p></div><div class='min-btn' onclick=\"minimizar()\">−</div></div>"
+              @"<div class='tabs'>"
+              @"<div class='tab active' id='t-aim' onclick=\"showTab('aim')\">🎯 AIM</div>"
+              @"<div class='tab' id='t-fov' onclick=\"showTab('fov')\">👁️ FOV</div>"
+              @"<div class='tab' id='t-visual' onclick=\"showTab('visual')\">✨ VISUAL</div>"
+              @"<div class='tab' id='t-misc' onclick=\"showTab('misc')\">⚙️ MISC</div>"
+              @"</div>"
+              @"<div id='page-aim'>"
+              @"<div class='card'><h3>AIMBOT</h3>"
+              @"<div class='row'><div><b>Aimbot</b><small>Apunta solo al enemigo</small></div><div class='sw on' onclick=\"tgl(this,'aimbot')\"></div></div>"
+              @"<div class='row'><div><b>Visible Check</b><small>No apunta tras pared</small></div><div class='sw on' onclick=\"tgl(this,'vis')\"></div></div>"
+              @"</div>"
+              @"<div class='card'><h3>HUESO</h3><div class='pill'>"
+              @"<div data-v='Cabeza' class='on' onclick=\"sel(this,'aimBone')\">Cabeza</div>"
+              @"<div data-v='Pecho' onclick=\"sel(this,'aimBone')\">Pecho</div>"
+              @"<div data-v='Cuello' onclick=\"sel(this,'aimBone')\">Cuello</div>"
+              @"</div>"
+              @"<div class='slider'><label>Suavidad <span id='smV'>4</span></label><input type='range' min='1' max='10' value='4' oninput=\"document.getElementById('smV').innerText=this.value; window.aimSmooth=this.value\"></div>"
+              @"</div>"
+              @"<div class='card'><h3>ARMA</h3>"
+              @"<div class='row'><b>Sin Retroceso</b><div class='sw on' onclick=\"tgl(this,'noRecoil')\"></div></div>"
+              @"<div class='row'><b>Sin Dispersión</b><div class='sw' onclick=\"tgl(this,'noSpread')\"></div></div>"
+              @"<div class='row'><b>Fuego Rápido</b><div class='sw' onclick=\"tgl(this,'rapidFire')\"></div></div>"
+              @"</div></div>"
+              @"<div id='page-fov' style='display:none'>"
+              @"<div class='card'><h3>FOV DEL AIM</h3>"
+              @"<div class='fov-preview' id='preview'><span id='previewTxt'>FOV 120</span></div>"
+              @"<div class='slider'><label>Aim FOV <span id='fovV'>120</span></label><input type='range' min='30' max='200' value='120' oninput=\"updateFov(this.value)\"></div>"
+              @"<div class='row'><b>Mostrar círculo FOV</b><div class='sw on' onclick=\"tgl(this,'showFovCircle')\"></div></div>"
+              @"<h3>COLOR</h3><div class='pill'>"
+              @"<div data-v='Rojo' class='on' onclick=\"sel(this,'fovColor');changeColor('red')\">🔴 Rojo</div>"
+              @"<div data-v='Verde' onclick=\"sel(this,'fovColor');changeColor('lime')\">🟢 Verde</div>"
+              @"<div data-v='Blanco' onclick=\"sel(this,'fovColor');changeColor('white')\">⚪ Blanco</div>"
+              @"<div data-v='Amarillo' onclick=\"sel(this,'fovColor');changeColor('yellow')\">🟡 Amarillo</div>"
+              @"</div>"
+              @"<div class='slider'><label>Grosor <span id='thV'>2</span></label><input type='range' min='1' max='5' value='2' oninput=\"document.getElementById('thV').innerText=this.value; document.getElementById('preview').style.borderWidth=this.value+'px'; window.fovThickness=this.value\"></div>"
+              @"</div>"
+              @"<div class='card'><h3>FOV DE CÁMARA</h3>"
+              @"<div class='slider'><label>Cámara FOV <span id='camV'>90°</span></label><input type='range' min='60' max='130' value='90' oninput=\"document.getElementById('camV').innerText=this.value+'°'; window.cameraFov=this.value\"></div>"
+              @"</div></div>"
+              @"<div id='page-visual' style='display:none'>"
+              @"<div class='card'><h3>ESP</h3>"
+              @"<div class='row'><b>ESP Master</b><div class='sw on' onclick=\"tgl(this,'esp')\"></div></div>"
+              @"<div class='row'><b>Caja / Box</b><div class='sw on' onclick=\"tgl(this,'espBox')\"></div></div>"
+              @"<div class='row'><b>Nombre</b><div class='sw on' onclick=\"tgl(this,'espName')\"></div></div>"
+              @"<div class='row'><b>Vida</b><div class='sw on' onclick=\"tgl(this,'espHealth')\"></div></div>"
+              @"<div class='row'><b>Distancia</b><div class='sw on' onclick=\"tgl(this,'espDistance')\"></div></div>"
+              @"<div class='row'><b>Chams</b><div class='sw on' onclick=\"tgl(this,'chams')\"></div></div>"
+              @"<div class='row'><b>Wallhack</b><div class='sw' onclick=\"tgl(this,'wallhack')\"></div></div>"
+              @"</div></div>"
+              @"<div id='page-misc' style='display:none'>"
+              @"<div class='card'><h3>EXTRA</h3>"
+              @"<div class='row'><b>Mostrar FPS</b><div class='sw on' onclick=\"tgl(this,'fps')\"></div></div>"
+              @"<div class='row'><b>Crosshair</b><div class='sw on' onclick=\"tgl(this,'crosshair')\"></div></div>"
+              @"</div></div>"
+              @"<div class='footer'><button class='btn' onclick=\"guardar()\">💾 GUARDAR Y APLICAR</button></div>"
+              @"<script>"
+              @"let S={};"
+              @"function tgl(el,k){el.classList.toggle('on');S[k]=el.classList.contains('on')}"
+              @"function sel(el,k){[...el.parentElement.children].forEach(c=>c.classList.remove('on'));el.classList.add('on');S[k]=el.dataset.v}"
+              @"function showTab(t){['aim','fov','visual','misc'].forEach(x=>{document.getElementById('page-'+x).style.display=x==t?'block':'none';document.getElementById('t-'+x).classList.toggle('active',x==t)})}"
+              @"function updateFov(v){document.getElementById('fovV').innerText=v;document.getElementById('previewTxt').innerText='FOV '+v;let size=60+(v-30)*0.3;let p=document.getElementById('preview');p.style.width=size+'px';p.style.height=size+'px';window.aimFov=v}"
+              @"function changeColor(c){document.getElementById('preview').style.borderColor=c}"
+              @"function minimizar(){window.webkit.messageHandlers.panelAction.postMessage('minimize')}"
+              @"function guardar(){let payload=JSON.stringify({...S,aimFov:window.aimFov,cameraFov:window.cameraFov,fovThickness:window.fovThickness,aimSmooth:window.aimSmooth});window.webkit.messageHandlers.panelSave.postMessage(payload)}"
+              @"</script></body></html>";
+              [self.webView loadHTMLString:html baseURL:nil];
           }
 
-          - (void)toggleMenu {
-              if (self.menuContainer) {
-                  [UIView animateWithDuration:0.3 animations:^{
-                      self.menuContainer.alpha = 0;
-                  } completion:^(BOOL finished) {
-                      [self.menuContainer removeFromSuperview];
-                      self.menuContainer = nil;
-                  }];
-              } else {
-                  self.menuContainer = [[UIView alloc] initWithFrame:CGRectMake(30, 190, 280, 400)];
-                  self.menuContainer.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.95];
-                  self.menuContainer.layer.cornerRadius = 15;
-                  
-                  UILabel *header = [[UILabel alloc] initWithFrame:CGRectMake(10, 10, 260, 30)];
-                  header.text = @"🩸 Blood Strike Panel";
-                  header.textColor = [UIColor whiteColor];
-                  header.font = [UIFont boldSystemFontOfSize:16];
-                  [self.menuContainer addSubview:header];
-                  
-                  // Simple UI placeholder
-                  UILabel *info = [[UILabel alloc] initWithFrame:CGRectMake(10, 50, 260, 20)];
-                  info.text = @"Configuración activa";
-                  info.textColor = [UIColor grayColor];
-                  [self.menuContainer addSubview:info];
+          - (void)handleDrag:(UIPanGestureRecognizer *)pan {
+              UIView *targetView = (pan.view == self.floatingBtn) ? self.floatingBtn : self.menuContainer;
+              CGPoint translation = [pan translationInView:targetView.superview];
+              targetView.center = CGPointMake(targetView.center.x + translation.x, targetView.center.y + translation.y);
+              [pan setTranslation:CGPointZero inView:targetView.superview];
+          }
 
-                  [UIApplication.sharedApplication.keyWindow addSubview:self.menuContainer];
-                  [UIView animateWithDuration:0.3 animations:^{
-                      self.menuContainer.alpha = 1;
-                  }];
+          - (void)openMenu {
+              self.floatingBtn.hidden = YES;
+              self.menuContainer.hidden = NO;
+              self.menuContainer.transform = CGAffineTransformMakeScale(0.8, 0.8);
+              [UIView animateWithDuration:0.2 animations:^{
+                  self.menuContainer.transform = CGAffineTransformIdentity;
+              }];
+          }
+
+          - (void)minimizeMenu {
+              [UIView animateWithDuration:0.15 animations:^{
+                  self.menuContainer.transform = CGAffineTransformMakeScale(0.8, 0.8);
+              } completion:^(BOOL finished) {
+                  self.menuContainer.hidden = YES;
+                  self.floatingBtn.hidden = NO;
+              }];
+          }
+
+          - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+              if ([message.name isEqualToString:@"panelAction"] && [message.body isEqualToString:@"minimize"]) {
+                  [self minimizeMenu];
+              } else if ([message.name isEqualToString:@"panelSave"]) {
+                  NSData *jsonData = [message.body dataUsingEncoding:NSUTF8StringEncoding];
+                  NSDictionary *newValues = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+                  if (newValues.count > 0) {
+                      [self.cfg addEntriesFromDictionary:newValues];
+                      NSData *saveData = [NSJSONSerialization dataWithJSONObject:self.cfg options:NSJSONWritingPrettyPrinted error:nil];
+                      [saveData writeToFile:self.configPath atomically:YES];
+                  }
+                  [self minimizeMenu];
               }
           }
-
-          - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {}
           @end
 
           %ctor {
-              dispatch_async(dispatch_get_main_queue(), ^{
-                  [[IanSakFloatingMenu sharedInstance] setupInWindow:[UIApplication sharedApplication].keyWindow];
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                  UIWindow *keyWindow = nil;
+                  for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                      if (scene.activationState == UISceneActivationStateForegroundActive) {
+                          for (UIWindow *w in scene.windows) {
+                              if (w.isKeyWindow) { keyWindow = w; break; }
+                          }
+                      }
+                  }
+                  if (!keyWindow) keyWindow = [UIApplication sharedApplication].windows.firstObject;
+                  [[IanSakFloatingMenu sharedInstance] setupInWindow:keyWindow];
               });
           }
           EOF
 
-          # 3. Compilar
-          make package
+      - name: Compilar Dylib
+        run: make FINALPACKAGE=1
 
-      - name: Upload Dylib Artifact
+      - name: Subir Dylib
         uses: actions/upload-artifact@v4
         with:
-          name: ianSakPanel.dylib
-          path: packages/*.dylib
+          name: ianSakPanel-dylib
+          path: .theos/obj/**/*.dylib
+          if-no-files-found: error
