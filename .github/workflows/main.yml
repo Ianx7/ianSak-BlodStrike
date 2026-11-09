@@ -490,13 +490,15 @@ jobs:
           - (void)prepare {
               void *core = imageNamed("UnityEngine.CoreModule");
               if (!core) return;
-              void *(*cfn)(void *, const char *, const char *) = (void *)IL.class_from_name;
+              void *(*cfn)(void *, const char *, const char *) =
+                  (void *(*)(void *, const char *, const char *))IL.class_from_name;
               g_camClass = cfn(core, "UnityEngine", "Camera");
               g_trClass = cfn(core, "UnityEngine", "Transform");
               void *comp = cfn(core, "UnityEngine", "Component");
               void *quat = cfn(core, "UnityEngine", "Quaternion");
               void *objc = cfn(core, "UnityEngine", "Object");
-              void *(*gm)(void *, const char *, int) = (void *)IL.class_get_method_from_name;
+              void *(*gm)(void *, const char *, int) =
+                  (void *(*)(void *, const char *, int))IL.class_get_method_from_name;
               if (g_camClass) { g_camMain = gm(g_camClass, "get_main", 0); g_w2s = gm(g_camClass, "WorldToScreenPoint", 1); }
               if (comp) g_getTr = gm(comp, "get_transform", 0);
               if (g_trClass) {
