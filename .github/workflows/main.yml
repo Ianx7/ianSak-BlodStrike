@@ -3,7 +3,7 @@ name: Build BloodStrike Mod iOS
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # Permite ejecutarlo manualmente desde la UI
+  workflow_dispatch:
 
 jobs:
   build:
@@ -27,7 +27,6 @@ jobs:
         mkdir -p injection/scripts
         
         # Copiar tus archivos clave (ajusta los nombres según tu repo)
-        # Asumiendo que tienes estos archivos en la raíz o carpetas específicas
         if [ -f "ianSak-panel.json" ]; then
           cp ianSak-panel.json injection/assets/
           echo "Copied config JSON"
@@ -46,8 +45,9 @@ jobs:
         zip -r ../BloodStrike_Mod.zip .
         cd ..
 
+    # CAMBIO CLAVE: Se usa v4 en lugar de v3
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: BloodStrike-iOS-Patch
         path: BloodStrike_Mod.zip
