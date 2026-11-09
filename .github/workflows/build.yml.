@@ -1,14 +1,33 @@
 name: build
 on: [push, workflow_dispatch]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Theos
-        uses: theos/setup-theos@v1
+      - name: Instalar Theos
+        run: |
+          export THEOS=$HOME/theos
+          sudo mkdir -p "$THEOS"
+          sudo chown -R "$(id -u):$(id -g)" "$THEOS"
+          git clone -q --recursive https://github.com/theos/theos.git "$THEOS"
+          brew install ldid || true
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+          echo "$THEOS/bin" >> "$GITHUB_PATH"
+
+      - name: Comprobar Theos
+        run: |
+          test -f "$THEOS/makefiles/common.mk" || { echo "Theos incompleto"; exit 1; }
+          echo "Theos OK en $THEOS"
 
       - name: Crear archivos
         run: |
@@ -787,6 +806,13 @@ jobs:
 
       - name: Strip
         run: find .theos/obj -name '*.dylib' -exec strip -x {} \;
+
+      - name: Verificar binario
+        run: |
+          F=$(find .theos/obj -name '*.dylib' | head -n1)
+          test -n "$F" || { echo "No se genero ningun dylib"; exit 1; }
+          ls -lh "$F"
+          echo "OK: $F"
 
       - name: Subir
         uses: actions/upload-artifact@v4
