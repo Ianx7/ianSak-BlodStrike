@@ -1,36 +1,174 @@
-name: Build ianSak Panel
+name: Generate ianSak Panel
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch: # Permite ejecutarlo manualmente desde la pestaña Actions
 
 jobs:
-  build:
-    runs-on: macos-latest
+  build-panel:
+    runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Xcode
-      uses: maxim-lobanov/setup-xcode@v1
-      with:
-        xcode-version: 'latest'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    - name: Build Project (Simulado)
-      run: |
-        echo "Verifying assets..."
-        # Aquí podrías agregar comandos reales de compilación si tienes un .xcodeproj
-        ls -la
-        
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: ianSak-Payload
-        path: |
-          index.html
-          style.css
-          script.js
-          # Agrega aquí tus otros archivos si los tienes separados
+      - name: Create Script File
+        run: |
+          cat > generate_panel.js << 'EOF'
+          // Simulamos FileManager para el entorno de Node.js
+          const fs = require('fs');
+          const path = require('path');
+
+          const defaultConfig = {
+            aimbot: true, aimBone: "Cabeza", aimFov: 120, aimSmooth: 4,
+            showFovCircle: true, fovColor: "Rojo", fovThickness: 2,
+            cameraFov: 90, esp: true, espBox: true, espName: true, espHealth: true, espDistance: true,
+            wallhack: false, chams: true, noRecoil: true, noSpread: false, rapidFire: false,
+            fps: true, crosshair: true
+          };
+
+          let cfg = { ...defaultConfig };
+          
+          // Intentar leer config.json si existe
+          const jsonPath = path.join(__dirname, 'config.json');
+          if (fs.existsSync(jsonPath)) {
+            try {
+              const fileData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+              cfg = { ...cfg, ...fileData };
+            } catch(e) { console.log("Error reading config"); }
+          }
+
+          const htmlTemplate = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ianSak Panel</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#0b0b0f;color:#fff;font-family:-apple-system,sans-serif;padding-bottom:30px}
+.top{background:linear-gradient(135deg,#ff1e1e,#7a0000);padding:18px 16px 12px;border-radius:0 0 22px 22px}
+.top h1{margin:0;font-size:22px}.top h1 span{color:#ffd700}
+.top p{margin:4px 0 0;font-size:12px;opacity:.85}
+.badge{background:rgba(255,255,255,.2);padding:3px 8px;border-radius:20px;font-size:11px;float:right}
+.tabs{display:flex;gap:8px;padding:12px 16px}
+.tab{flex:1;text-align:center;padding:10px 0;border-radius:12px;background:#1c1c22;font-size:13px;font-weight:700;color:#aaa}
+.tab.active{background:#ff1e1e;color:#fff}
+.card{margin:0 16px 12px;background:#16161c;border:1px solid #26262e;border-radius:16px;padding:6px 14px}
+.card h3{font-size:12px;color:#ff5555;letter-spacing:1.5px;margin:12px 0 4px}
+.row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #22222a}
+.row:last-child{border:none}.row b{font-size:15px}.row small{display:block;color:#888;font-size:11px}
+.sw{width:50px;height:29px;background:#2a2a33;border-radius:20px;position:relative;flex-shrink:0}
+.sw:before{content:'';position:absolute;top:3px;left:3px;width:23px;height:23px;background:#fff;border-radius:50%}
+.sw.on{background:#ff1e1e}.sw.on:before{left:24px}
+.pill{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px}
+.pill div{padding:7px 12px;border-radius:20px;background:#22222a;font-size:12px;color:#bbb}
+.pill div.on{background:#ff1e1e;color:#fff}
+.slider{padding:8px 0 14px}.slider label{display:flex;justify-content:space-between;font-size:14px;margin-bottom:8px}
+.slider label span{color:#ffd700;font-weight:700}
+input[type=range]{width:100%;-webkit-appearance:none;height:6px;background:#2a2a33;border-radius:10px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;background:#ff1e1e;border-radius:50%;border:3px solid #fff}
+.fov-preview{width:140px;height:140px;margin:12px auto;border-radius:50%;border:2px solid #ff1e1e;display:flex;align-items:center;justify-content:center;position:relative;background:rgba(255,30,30,.05)}
+.fov-preview:before{content:'';width:4px;height:4px;background:#ffd700;border-radius:50%;position:absolute}
+.fov-preview span{font-size:11px;color:#aaa;margin-top:100px}
+.btn{width:100%;padding:15px;border:none;border-radius:14px;background:linear-gradient(135deg,#ff1e1e,#c80000);color:#fff;font-size:16px;font-weight:800}
+.footer{padding:4px 16px}.status{text-align:center;font-size:11px;color:#666;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="top"><div class="badge">● ONLINE</div><h1>ianSak <span>PANEL</span></h1><p>BLOOD STRIKE • v3 + FOV</p></div>
+<div class="tabs">
+  <div class="tab active" id="t-aim" onclick="showTab('aim')">🎯 AIM</div>
+  <div class="tab" id="t-fov" onclick="showTab('fov')">👁️ FOV</div>
+  <div class="tab" id="t-visual" onclick="showTab('visual')">✨ VISUAL</div>
+  <div class="tab" id="t-misc" onclick="showTab('misc')">⚙️ MISC</div>
+</div>
+
+<!-- AIM -->
+<div id="page-aim">
+  <div class="card"><h3>AIMBOT</h3>
+    <div class="row"><div><b>Aimbot</b><small>Apunta solo al enemigo</small></div><div class="sw \${cfg.aimbot?'on':''}" onclick="tgl(this,'aimbot')"></div></div>
+    <div class="row"><div><b>Visible Only</b><small>Solo enemigos visibles</small></div><div class="sw \${cfg.visibleOnly?'on':''}" onclick="tgl(this,'visibleOnly')"></div></div>
+    <div class="row"><div><b>Aim Bone</b><small>Parte del cuerpo a apuntar</small></div><div class="pill">
+      <div class="\${cfg.aimBone==='Cabeza'?'on':''}" onclick="setBone('Cabeza')">Head</div>
+      <div class="\${cfg.aimBone==='Torso'?'on':''}" onclick="setBone('Torso')">Body</div>
+      <div class="\${cfg.aimBone==='Pecho'?'on':''}" onclick="setBone('Pecho')">Chest</div>
+    </div></div>
+    <div class="slider"><label><span>FOV Radius</span><span>\${cfg.aimFov}</span></label><input type="range" min="10" max="360" value="\${cfg.aimFov}" oninput="updateVal('aimFov', this.value)"></div>
+    <div class="slider"><label><span>Smoothness</span><span>\${cfg.aimSmooth}</span></label><input type="range" min="1" max="20" value="\${cfg.aimSmooth}" oninput="updateVal('aimSmooth', this.value)"></div>
+  </div>
+</div>
+
+<!-- FOV -->
+<div id="page-fov" style="display:none">
+  <div class="card"><h3>FIELD OF VIEW</h3>
+    <div class="fov-preview"><span>Preview</span></div>
+    <div class="row"><div><b>Show Circle</b></div><div class="sw \${cfg.showFovCircle?'on':''}" onclick="tgl(this,'showFovCircle')"></div></div>
+    <div class="row"><div><b>Thickness</b><small>Grosor de línea</small></div><div class="slider" style="width:100px; padding:0"><input type="range" min="1" max="10" value="\${cfg.fovThickness}" oninput="updateVal('fovThickness', this.value)"></div></div>
+    <div class="row"><div><b>Color</b></div><div class="pill"><div class="\${cfg.fovColor==='Rojo'?'on':''}" onclick="setColor('Rojo')">Red</div><div class="\${cfg.fovColor==='Verde'?'on':''}" onclick="setColor('Verde')">Green</div></div></div>
+  </div>
+</div>
+
+<script>
+// Lógica básica del panel
+function showTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('t-'+id).classList.add('active');
+  document.querySelectorAll('[id^="page-"]').forEach(p => p.style.display = 'none');
+  document.getElementById('page-'+id).style.display = 'block';
+}
+
+function tgl(el, key) {
+  el.classList.toggle('on');
+  cfg[key] = !cfg[key];
+  saveCfg();
+}
+
+function updateVal(key, val) {
+  cfg[key] = parseInt(val);
+  event.target.previousElementSibling.querySelector('span').innerText = val;
+  saveCfg();
+}
+
+function setBone(bone) {
+  cfg.aimBone = bone;
+  // Actualizar clases visuales sería necesario aquí
+  saveCfg();
+}
+
+function setColor(color) {
+  cfg.fovColor = color;
+  saveCfg();
+}
+
+function saveCfg() {
+  // En un entorno real, esto iría a fm.writeString(path, JSON.stringify(cfg))
+  console.log("Config updated:", cfg);
+}
+
+// Inicializar vista
+showTab('aim');
+</script>
+</body>
+</html>`;
+
+          // Escribir el archivo final
+          fs.writeFileSync('index.html', htmlTemplate);
+          console.log("Panel generated successfully.");
+          EOF
+
+      - name: Run Generator
+        run: node generate_panel.js
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ianSak-Payload
+          path: index.html
