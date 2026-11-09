@@ -1,111 +1,153 @@
-name: Compilar ianSakPanel
+let fm = FileManager.iCloud()
+let path = fm.joinPath(fm.documentsDirectory(), "ianSak-panel.json")
 
-on:
-  push:
-  workflow_dispatch:
+let cfg = {
+  aimbot: true, aimBone: "Cabeza", aimFov: 120, aimSmooth: 4,
+  showFovCircle: true, fovColor: "Rojo", fovThickness: 2,
+  cameraFov: 90, esp: true, espBox: true, espName: true, espHealth: true, espDistance: true,
+  wallhack: false, chams: true, noRecoil: true, noSpread: false, rapidFire: false,
+  fps: true, crosshair: true
+}
+if (fm.fileExists(path)) {
+  try { cfg = {...cfg, ...JSON.parse(fm.readString(path))} } catch(e){}
+}
 
-jobs:
-  build:
-    runs-on: macos-latest
-    steps:
-      - name: Preparar y compilar
-        run: |
-          cat << 'EOF' > panel.mm
-          #import <UIKit/UIKit.h>
-          #import <Foundation/Foundation.h>
-          #import <WebKit/WebKit.h>
+let html = `
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#0b0b0f;color:#fff;font-family:-apple-system;padding-bottom:30px}
+.top{background:linear-gradient(135deg,#ff1e1e,#7a0000);padding:18px 16px 12px;border-radius:0 0 22px 22px}
+.top h1{margin:0;font-size:22px}.top h1 span{color:#ffd700}
+.top p{margin:4px 0 0;font-size:12px;opacity:.85}
+.badge{background:rgba(255,255,255,.2);padding:3px 8px;border-radius:20px;font-size:11px;float:right}
+.tabs{display:flex;gap:8px;padding:12px 16px}
+.tab{flex:1;text-align:center;padding:10px 0;border-radius:12px;background:#1c1c22;font-size:13px;font-weight:700;color:#aaa}
+.tab.active{background:#ff1e1e;color:#fff}
+.card{margin:0 16px 12px;background:#16161c;border:1px solid #26262e;border-radius:16px;padding:6px 14px}
+.card h3{font-size:12px;color:#ff5555;letter-spacing:1.5px;margin:12px 0 4px}
+.row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #22222a}
+.row:last-child{border:none}.row b{font-size:15px}.row small{display:block;color:#888;font-size:11px}
+.sw{width:50px;height:29px;background:#2a2a33;border-radius:20px;position:relative;flex-shrink:0}
+.sw:before{content:'';position:absolute;top:3px;left:3px;width:23px;height:23px;background:#fff;border-radius:50%}
+.sw.on{background:#ff1e1e}.sw.on:before{left:24px}
+.pill{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px}
+.pill div{padding:7px 12px;border-radius:20px;background:#22222a;font-size:12px;color:#bbb}
+.pill div.on{background:#ff1e1e;color:#fff}
+.slider{padding:8px 0 14px}.slider label{display:flex;justify-content:space-between;font-size:14px;margin-bottom:8px}
+.slider label span{color:#ffd700;font-weight:700}
+input[type=range]{width:100%;-webkit-appearance:none;height:6px;background:#2a2a33;border-radius:10px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;background:#ff1e1e;border-radius:50%;border:3px solid #fff}
+.fov-preview{width:140px;height:140px;margin:12px auto;border-radius:50%;border:2px solid #ff1e1e;display:flex;align-items:center;justify-content:center;position:relative;background:rgba(255,30,30,.05)}
+.fov-preview:before{content:'';width:4px;height:4px;background:#ffd700;border-radius:50%;position:absolute}
+.fov-preview span{font-size:11px;color:#aaa;margin-top:100px}
+.btn{width:100%;padding:15px;border:none;border-radius:14px;background:linear-gradient(135deg,#ff1e1e,#c80000);color:#fff;font-size:16px;font-weight:800}
+.footer{padding:4px 16px}.status{text-align:center;font-size:11px;color:#666;margin-top:10px}
+</style></head><body>
+<div class="top"><div class="badge">● ONLINE</div><h1>ianSak <span>PANEL</span></h1><p>BLOOD STRIKE • v3 + FOV</p></div>
+<div class="tabs">
+  <div class="tab active" id="t-aim" onclick="showTab('aim')">🎯 AIM</div>
+  <div class="tab" id="t-fov" onclick="showTab('fov')">👁️ FOV</div>
+  <div class="tab" id="t-visual" onclick="showTab('visual')">✨ VISUAL</div>
+  <div class="tab" id="t-misc" onclick="showTab('misc')">⚙️ MISC</div>
+</div>
 
-          @interface PassThroughWindow : UIWindow
-          @end
-          @implementation PassThroughWindow
-          - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-              UIView *hitView = [super hitTest:point withEvent:event];
-              return (hitView == self.rootViewController.view) ? nil : hitView;
-          }
-          @end
+<!-- AIM -->
+<div id="page-aim">
+  <div class="card"><h3>AIMBOT</h3>
+    <div class="row"><div><b>Aimbot</b><small>Apunta solo al enemigo</small></div><div class="sw ${cfg.aimbot?'on':''}" onclick="tgl(this,'aimbot')"></div></div>
+    <div class="row"><div><b>Visible Check</b><small>No apunta tras pared</small></div><div class="sw on" onclick="tgl(this,'vis')"></div></div>
+    <div style="padding:4px 0 6px"><small style="color:#888">HUESO</small><div class="pill">
+      <div data-v="Cabeza" class="${cfg.aimBone=='Cabeza'?'on':''}" onclick="sel(this,'aimBone')">Cabeza</div>
+      <div data-v="Pecho" class="${cfg.aimBone=='Pecho'?'on':''}" onclick="sel(this,'aimBone')">Pecho</div>
+      <div data-v="Cuello" class="${cfg.aimBone=='Cuello'?'on':''}" onclick="sel(this,'aimBone')">Cuello</div>
+    </div></div>
+    <div class="slider"><label>Suavidad <span id="smV">${cfg.aimSmooth}</span></label><input type="range" min="1" max="10" value="${cfg.aimSmooth}" oninput="document.getElementById('smV').innerText=this.value; window.aimSmooth=this.value"></div>
+  </div>
+  <div class="card"><h3>ARMA</h3>
+    <div class="row"><div><b>Sin Retroceso</b></div><div class="sw ${cfg.noRecoil?'on':''}" onclick="tgl(this,'noRecoil')"></div></div>
+    <div class="row"><div><b>Sin Dispersión</b></div><div class="sw ${cfg.noSpread?'on':''}" onclick="tgl(this,'noSpread')"></div></div>
+    <div class="row"><div><b>Fuego Rápido</b></div><div class="sw ${cfg.rapidFire?'on':''}" onclick="tgl(this,'rapidFire')"></div></div>
+  </div>
+</div>
 
-          @interface PanelViewController : UIViewController <WKScriptMessageHandler, UIGestureRecognizerDelegate>
-          @property (nonatomic, strong) UIView *containerView;
-          @property (nonatomic, strong) WKWebView *webView;
-          @end
+<!-- FOV NUEVO -->
+<div id="page-fov" style="display:none">
+  <div class="card"><h3>🎯 FOV DEL AIM</h3>
+    <div class="fov-preview" id="preview"><span id="previewTxt">FOV ${cfg.aimFov}</span></div>
+    <div class="slider"><label>Aim FOV <span id="fovV">${cfg.aimFov}</span></label><input type="range" min="30" max="250" value="${cfg.aimFov}" oninput="updateFov(this.value)"></div>
+    <div class="row"><div><b>Mostrar círculo FOV</b><small>Se ve el círculo en pantalla</small></div><div class="sw ${cfg.showFovCircle?'on':''}" onclick="tgl(this,'showFovCircle')"></div></div>
+    <div style="padding:4px 0 6px"><small style="color:#888">COLOR DEL CÍRCULO</small><div class="pill">
+      <div data-v="Rojo" class="${cfg.fovColor=='Rojo'?'on':''}" onclick="sel(this,'fovColor');changeColor('red')">🔴 Rojo</div>
+      <div data-v="Verde" class="${cfg.fovColor=='Verde'?'on':''}" onclick="sel(this,'fovColor');changeColor('lime')">🟢 Verde</div>
+      <div data-v="Blanco" class="${cfg.fovColor=='Blanco'?'on':''}" onclick="sel(this,'fovColor');changeColor('white')">⚪ Blanco</div>
+      <div data-v="Amarillo" class="${cfg.fovColor=='Amarillo'?'on':''}" onclick="sel(this,'fovColor');changeColor('yellow')">🟡 Amarillo</div>
+    </div></div>
+    <div class="slider"><label>Grosor del círculo <span id="thV">${cfg.fovThickness}</span></label><input type="range" min="1" max="5" value="${cfg.fovThickness}" oninput="document.getElementById('thV').innerText=this.value; document.getElementById('preview').style.borderWidth=this.value+'px'; window.fovThickness=this.value"></div>
+  </div>
+  <div class="card"><h3>📷 FOV DE CÁMARA</h3>
+    <div class="slider"><label>Cámara FOV <span id="camV">${cfg.cameraFov}</span></label><input type="range" min="60" max="130" value="${cfg.cameraFov}" oninput="document.getElementById('camV').innerText=this.value+'°'; window.cameraFov=this.value"></div>
+    <p style="font-size:12px;color:#888;line-height:1.5">60° = normal<br>90° = se ve más ancho<br>120° = ultra ancho, se ve todo</p>
+  </div>
+</div>
 
-          @implementation PanelViewController
-          - (NSURL *)configFileURL {
-              NSURL *docs = [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
-              return [docs URLByAppendingPathComponent:@"ianSak-panel.json"];
-          }
-          - (NSDictionary *)loadConfig {
-              NSMutableDictionary *cfg = [@{@"aimbot":@YES,@"aimBone":@"Cabeza",@"aimFov":@120,@"aimSmooth":@4,@"showFovCircle":@YES,@"fovColor":@"Rojo",@"fovThickness":@2,@"cameraFov":@90,@"esp":@YES,@"espBox":@YES,@"espName":@YES,@"espHealth":@YES,@"espDistance":@YES,@"wallhack":@NO,@"chams":@YES,@"noRecoil":@YES,@"noSpread":@NO,@"rapidFire":@NO,@"fps":@YES,@"crosshair":@YES} mutableCopy];
-              NSData *data = [NSData dataWithContentsOfURL:[self configFileURL]];
-              if (data) { NSDictionary *s = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil]; if (s) [cfg addEntriesFromDictionary:s]; }
-              return cfg;
-          }
-          - (void)viewDidLoad {
-              [super viewDidLoad];
-              self.view.backgroundColor = [UIColor clearColor];
-              CGFloat w = 320.0, h = 480.0;
-              self.containerView = [[UIView alloc] initWithFrame:CGRectMake((self.view.bounds.size.width-w)/2.0, (self.view.bounds.size.height-h)/2.0, w, h)];
-              self.containerView.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.06 alpha:1.0];
-              self.containerView.layer.cornerRadius = 22.0;
-              self.containerView.layer.borderWidth = 1.5;
-              self.containerView.layer.borderColor = [UIColor colorWithRed:1.0 green:0.12 blue:0.12 alpha:0.65].CGColor;
-              self.containerView.clipsToBounds = YES;
-              self.containerView.hidden = YES;
-              [self.view addSubview:self.containerView];
-              [self.containerView addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)]];
-              WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-              [config.userContentController addScriptMessageHandler:self name:@"saveConfig"];
-              self.webView = [[WKWebView alloc] initWithFrame:self.containerView.bounds configuration:config];
-              self.webView.opaque = NO;
-              self.webView.backgroundColor = [UIColor clearColor];
-              self.webView.scrollView.bounces = NO;
-              [self.containerView addSubview:self.webView];
-              [self renderHTML];
-          }
-          - (void)renderHTML {
-              NSString *jsonStr = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:[self loadConfig] options:0 error:nil] encoding:NSUTF8StringEncoding];
-NSString html = [NSString stringWithFormat:@"{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}body{margin:0;background:#0b0b0f;color:#fff;font-family:-apple-system,sans-serif;padding-bottom:24px}.top{background:linear-gradient(135deg,#ff1e1e,#7a0000);padding:16px;border-radius:0 0 20px 20px}.top h1{margin:0;font-size:20px}.top h1 span{color:#ffd700}.top p{margin:4px 0 0;font-size:11px;opacity:.85}.badge{background:rgba(255,255,255,.2);padding:3px 8px;border-radius:20px;font-size:10px;float:right}.tabs{display:flex;gap:6px;padding:10px 14px}.tab{flex:1;text-align:center;padding:8px 0;border-radius:10px;background:#1c1c22;font-size:12px;font-weight:700;color:#aaa}.tab.active{background:#ff1e1e;color:#fff}.card{margin:0 14px 10px;background:#16161c;border:1px solid #26262e;border-radius:14px;padding:4px 12px}.card h3{font-size:11px;color:#ff5555;letter-spacing:1.2px;margin:10px 0 4px}.row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #22222a}.row:last-child{border:none}.row b{font-size:14px}.row small{display:block;color:#888;font-size:10px}.sw{width:46px;height:26px;background:#2a2a33;border-radius:20px;position:relative;flex-shrink:0}.sw:before{content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;background:#fff;border-radius:50%%;transition:.2s}.sw.on{background:#ff1e1e}.sw.on:before{left:23px}.pill{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px}.pill div{padding:6px 10px;border-radius:16px;background:#22222a;font-size:11px;color:#bbb}.pill div.on{background:#ff1e1e;color:#fff}.slider{padding:6px 0 12px}.slider label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px}.slider label span{color:#ffd700;font-weight:700}input[type=range]{width:100%%;-webkit-appearance:none;height:5px;background:#2a2a33;border-radius:10px}input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;background:#ff1e1e;border-radius:50%%;border:2px solid #fff}.fov-preview{width:110px;height:110px;margin:10px auto;border-radius:50%%;border:2px solid #ff1e1e;display:flex;align-items:center;justify-content:center;position:relative;background:rgba(255,30,30,.05)}.fov-preview:before{content:'';width:4px;height:4px;background:#ffd700;border-radius:50%%;position:absolute}.fov-preview span{font-size:10px;color:#aaa;margin-top:75px}.btn{width:100%%;padding:12px;border:none;border-radius:12px;background:linear-gradient(135deg,#ff1e1e,#c80000);color:#fff;font-size:14px;font-weight:800}.footer{padding:4px 14px}● ONLINEianSak PANELBLOOD STRIKE • v3 + FOV<div class='tab active' id='t-aim' onclick="showTab('aim')">🎯 AIM<div class='tab' id='t-fov' onclick="showTab('fov')">👁️ FOV<div class='tab' id='t-visual' onclick="showTab('visual')">✨ VISUAL<div class='tab' id='t-misc' onclick="showTab('misc')">⚙️ MISCAIMBOTAimbotApunta al objetivo<div class='sw' id='sw-aimbot' onclick="tgl(this,'aimbot')">HUESO<div data-v='Cabeza' onclick="sel(this,'aimBone')">Cabeza<div data-v='Pecho' onclick="sel(this,'aimBone')">Pecho<div data-v='Cuello' onclick="sel(this,'aimBone')">CuelloSuavidad 4<input type='range' id='sl-aimSmooth' min='1' max='10' oninput="val('aimSmooth','smV',this.value)">ARMASin Retroceso<div class='sw' id='sw-noRecoil' onclick="tgl(this,'noRecoil')">Sin Dispersión<div class='sw' id='sw-noSpread' onclick="tgl(this,'noSpread')">Fuego Rápido<div class='sw' id='sw-rapidFire' onclick="tgl(this,'rapidFire')">🎯 FOV DEL AIMFOV 120Aim FOV 120<input type='range' id='sl-aimFov' min='30' max='250' oninput="updateFov(this.value)">Mostrar círculo FOV<div class='sw' id='sw-showFovCircle' onclick="tgl(this,'showFovCircle')">COLOR<div data-v='Rojo' onclick="sel(this,'fovColor');changeColor('red')">🔴 Rojo<div data-v='Verde' onclick="sel(this,'fovColor');changeColor('lime')">🟢 Verde<div data-v='Blanco' onclick="sel(this,'fovColor');changeColor('white')">⚪ Blanco<div data-v='Amarillo' onclick="sel(this,'fovColor');changeColor('yellow')">🟡 AmarilloGrosor 2<input type='range' id='sl-fovThickness' min='1' max='5' oninput="updateTh(this.value)">📷 FOV DE CÁMARACámara FOV 90°<input type='range' id='sl-cameraFov' min='60' max='130' oninput="updateCam(this.value)">ESPESP Master<div class='sw' id='sw-esp' onclick="tgl(this,'esp')">Caja / Box<div class='sw' id='sw-espBox' onclick="tgl(this,'espBox')">Nombre<div class='sw' id='sw-espName' onclick="tgl(this,'espName')">Vida<div class='sw' id='sw-espHealth' onclick="tgl(this,'espHealth')">Distancia<div class='sw' id='sw-espDistance' onclick="tgl(this,'espDistance')">Chams<div class='sw' id='sw-chams' onclick="tgl(this,'chams')">Wallhack<div class='sw' id='sw-wallhack' onclick="tgl(this,'wallhack')">EXTRAMostrar FPS<div class='sw' id='sw-fps' onclick="tgl(this,'fps')">Crosshair<div class='sw' id='sw-crosshair' onclick="tgl(this,'crosshair')">💾 GUARDAR Y CERRARlet cfg=%@;const colorMap={'Rojo':'red','Verde':'lime','Blanco':'white','Amarillo':'yellow'};function init(){for(let k in cfg){let sw=document.getElementById('sw-'+k);if(sw&&cfg[k])sw.classList.add('on');let sl=document.getElementById('sl-'+k);if(sl)sl.value=cfg[k];}document.getElementById('smV').innerText=cfg.aimSmooth;updateFov(cfg.aimFov);updateTh(cfg.fovThickness);updateCam(cfg.cameraFov);changeColor(colorMap[cfg.fovColor]||'red');document.querySelectorAll('#pill-aimBone div').forEach(d=>{if(d.dataset.v==cfg.aimBone)d.classList.add('on')});document.querySelectorAll('#pill-fovColor div').forEach(d=>{if(d.dataset.v==cfg.fovColor)d.classList.add('on')});}function tgl(el,k){el.classList.toggle('on');cfg[k]=el.classList.contains('on')}function sel(el,k){[...el.parentElement.children].forEach(c=>c.classList.remove('on'));el.classList.add('on');cfg[k]=el.dataset.v}function val(k,lbl,v){document.getElementById(lbl).innerText=v;cfg[k]=parseInt(v)}function updateFov(v){v=parseInt(v);cfg.aimFov=v;document.getElementById('fovV').innerText=v;document.getElementById('previewTxt').innerText='FOV '+v;let s=55+(v-30)*0.25;let p=document.getElementById('preview');p.style.width=s+'px';p.style.height=s+'px';}function updateTh(v){v=parseInt(v);cfg.fovThickness=v;document.getElementById('thV').innerText=v;document.getElementById('preview').style.borderWidth=v+'px';}function updateCam(v){v=parseInt(v);cfg.cameraFov=v;document.getElementById('camV').innerText=v+'°';}function changeColor(c){document.getElementById('preview').style.borderColor=c}function showTab(t){['aim','fov','visual','misc'].forEach(x=>{document.getElementById('page-'+x).style.display=x==t?'block':'none';document.getElementById('t-'+x).classList.toggle('active',x==t)})}function guardar(){window.webkit.messageHandlers.saveConfig.postMessage(JSON.stringify(cfg));}init();", jsonStr];
-[self.webView loadHTMLString:html baseURL:nil];
+<!-- VISUAL -->
+<div id="page-visual" style="display:none">
+  <div class="card"><h3>ESP</h3>
+    <div class="row"><div><b>ESP Master</b></div><div class="sw ${cfg.esp?'on':''}" onclick="tgl(this,'esp')"></div></div>
+    <div class="row"><div><b>Caja / Box</b></div><div class="sw ${cfg.espBox?'on':''}" onclick="tgl(this,'espBox')"></div></div>
+    <div class="row"><div><b>Nombre</b></div><div class="sw ${cfg.espName?'on':''}" onclick="tgl(this,'espName')"></div></div>
+    <div class="row"><div><b>Vida</b></div><div class="sw ${cfg.espHealth?'on':''}" onclick="tgl(this,'espHealth')"></div></div>
+    <div class="row"><div><b>Distancia</b></div><div class="sw ${cfg.espDistance?'on':''}" onclick="tgl(this,'espDistance')"></div></div>
+    <div class="row"><div><b>Chams</b></div><div class="sw ${cfg.chams?'on':''}" onclick="tgl(this,'chams')"></div></div>
+    <div class="row"><div><b>Wallhack</b></div><div class="sw ${cfg.wallhack?'on':''}" onclick="tgl(this,'wallhack')"></div></div>
+  </div>
+</div>
+
+<div id="page-misc" style="display:none">
+  <div class="card"><h3>EXTRA</h3>
+    <div class="row"><div><b>Mostrar FPS</b></div><div class="sw ${cfg.fps?'on':''}" onclick="tgl(this,'fps')"></div></div>
+    <div class="row"><div><b>Crosshair</b></div><div class="sw ${cfg.crosshair?'on':''}" onclick="tgl(this,'crosshair')"></div></div>
+  </div>
+</div>
+
+<div class="footer"><button class="btn" onclick="guardar()">💾 GUARDAR Y APLICAR</button><div class="status">ianSak • FOV agregado</div></div>
+
+<script>
+let S={}
+function tgl(el,k){el.classList.toggle('on');S[k]=el.classList.contains('on')}
+function sel(el,k){[...el.parentElement.children].forEach(c=>c.classList.remove('on'));el.classList.add('on');S[k]=el.dataset.v}
+function showTab(t){['aim','fov','visual','misc'].forEach(x=>{document.getElementById('page-'+x).style.display=x==t?'block':'none';document.getElementById('t-'+x).classList.toggle('active',x==t)})}
+function updateFov(v){
+  document.getElementById('fovV').innerText=v;
+  document.getElementById('previewTxt').innerText='FOV '+v;
+  let size = 70 + (v-30)*0.35;
+  let p=document.getElementById('preview');
+  p.style.width=size+'px'; p.style.height=size+'px';
+  window.aimFov=v;
 }
-- (void)userContentController:(WKUserContentController *)u didReceiveScriptMessage:(WKScriptMessage *)m {
-if ([m.name isEqualToString:@"saveConfig"] && [m.body isKindOfClass:[NSString class]]) {
-[[(NSString *)m.body dataUsingEncoding:NSUTF8StringEncoding] writeToURL:[self configFileURL] atomically:YES];
-self.containerView.hidden = YES;
-}
-}
-- (void)handlePan:(UIPanGestureRecognizer *)p {
-CGPoint t = [p translationInView:self.view];
-self.containerView.center = CGPointMake(self.containerView.center.x + t.x, self.containerView.center.y + t.y);
-[p setTranslation:CGPointZero inView:self.view];
-}
-- (void)toggleMenu { self.containerView.hidden = !self.containerView.hidden; }
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return YES; }
-@end
-static PassThroughWindow *gWindow = nil;
-static void attachTap(UIWindow *w, PanelViewController *vc) {
-if (!w) return;
-UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(toggleMenu)];
-tap.numberOfTouchesRequired = 3; tap.numberOfTapsRequired = 3; tap.cancelsTouchesInView = NO; tap.delegate = vc;
-[w addGestureRecognizer:tap];
-}
-attribute((constructor)) static void initPanel(void) {
-dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-UIWindowScene *scene = nil;
-for (UIScene *s in UIApplication.sharedApplication.connectedScenes) { if ([s isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)s; break; } }
-gWindow = scene ? [[PassThroughWindow alloc] initWithWindowScene:scene] : [[PassThroughWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
-gWindow.windowLevel = UIWindowLevelAlert + 100; gWindow.backgroundColor = [UIColor clearColor];
-PanelViewController *vc = [[PanelViewController alloc] init];
-gWindow.rootViewController = vc; [gWindow makeKeyAndVisible];
-attachTap(gWindow, vc);
-if (scene) { for (UIWindow *w in scene.windows) { if (w != gWindow) attachTap(w, vc); } }
-});
-}
-EOF
-SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-mkdir -p salida
-xcrun -sdk iphoneos clang++ -arch arm64 -isysroot "$SDK" -miphoneos-version-min=15.0 -dynamiclib -fobjc-arc -O2 -Wno-everything -framework UIKit -framework Foundation -framework WebKit panel.mm -o salida/ianSakPanel.dylib
-- name: Subir artefacto
-uses: actions/upload-artifact@v4
-with:
-name: ianSakPanel-dylib
-path: salida/ianSakPanel.dylib
+function changeColor(c){document.getElementById('preview').style.borderColor=c}
+function guardar(){window.done=JSON.stringify({...S,aimFov:window.aimFov,cameraFov:window.cameraFov,fovThickness:window.fovThickness,aimSmooth:window.aimSmooth})}
+</script>
+</body></html>
+`
+
+let web = new WebView()
+await web.loadHTML(html)
+await web.present(true)
+let out = await web.evaluateJavaScript(`window.done || '{}'`)
+try {
+  let n = JSON.parse(out)
+  if (Object.keys(n).length) {
+    cfg = {...cfg, ...n}
+    if(n.aimFov) cfg.aimFov = parseInt(n.aimFov)
+    if(n.cameraFov) cfg.cameraFov = parseInt(n.cameraFov)
+    fm.writeString(path, JSON.stringify(cfg))
+  }
+} catch(e){}
+let a = new Alert()
+a.title = "✅ FOV Guardado"
+a.message = `Aim FOV: ${cfg.aimFov}\\nCámara FOV: ${cfg.cameraFov}°\\nCírculo: ${cfg.showFovCircle?'ON':'OFF'}`
+a.addAction("Listo")
+await a.present()
+Script.complete()
